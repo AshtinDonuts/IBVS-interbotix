@@ -1,3 +1,4 @@
+# CHANGE CAMERA INTRINSICS HERE
 """
 general facade for PIL, all major local image stores and edits are done here 
 """

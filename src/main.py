@@ -22,7 +22,8 @@ def init_pybullet() -> int:
     """
     initialises the pybullet scene
     """
-    pclient = p.connect(p.DIRECT)
+    pclient = p.connect(p.GUI)
+    # pclient = p.connect(p.DIRECT)
     p.setAdditionalSearchPath(pybullet_data.getDataPath())
     p.setGravity(0, 0, -10)
     # p.setRealTimeSimulation(True)
@@ -167,7 +168,6 @@ def capture_camera_image(
     )
     return img_details
 
-
 def update_pos_and_orn(
     transform: np.ndarray,
     velocity: np.ndarray,
@@ -236,9 +236,9 @@ def main() -> None:
     sleep(5)  # arbitrary sleep to let the scene load
     for i in range(MAX_ITERATIONS):
         p.stepSimulation()
-        robot_rot_matrix = get_robot_rotation_matrix(robot_orientation)
+        robot_rot_matrix = get_robot_rotation_matrix(robot_orientation)  # what frame?
 
-        img = capture_camera_image(robot_pos, robot_rot_matrix)
+        img = capture_camera_image(robot_pos, robot_rot_matrix)  # wxhx4 (or hxwx4)
 
         rgb_img_arr = convert_img_to_arr(
             img[2], int(img_conf["height"]), int(img_conf["width"])

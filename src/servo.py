@@ -1,13 +1,25 @@
 """
 servoing module 
+--------
+
+Supplementary update:
+Jun 24 : Integrate SuperPoint feature detection
+
 """
 
 import numpy as np
 import cv2
 from typing import List, Union, Tuple
 
-# NOTE: this implementation of visual servoing uses Aruco markers, which is why we can simply use detectMarkers of the cv.aruco module
 
+
+# ---- New functions BEGIN ----
+
+
+# ---- New functions END ----
+
+
+# NOTE: this implementation of visual servoing uses Aruco markers
 
 def get_markers(img_arr: np.ndarray) -> Tuple[Union[List, None], List]:
     """

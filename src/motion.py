@@ -1,5 +1,5 @@
 """
-responsible for determining robot velocity required based on current image 
+Functions to determine robot velocity based on current image 
 """
 
 import numpy as np
@@ -8,7 +8,7 @@ from typing import List
 
 from servo import get_marker_corners
 
-LAMBDA = 1
+LAMBDA = 1  ## Modifiable param
 required_pos = None
 
 
@@ -44,6 +44,13 @@ def get_velocity(
     """
     gets the velocity vector given the points and the depth buffer
     NOTE: we have 8 features and only 6 dof. In this case we naively take the first three points.
+
+    Supplementary notes:
+    --------------------
+    The reason to use the first-three points is that each point contributes 2 DoF [Chaumette et al.].
+    By using 3 points, we now have k = 6.
+    This means the Interaction Matrix (aka. Jacobian) becomes a full-rank square matrix.
+    This allows us to use the true inverse instead of the Moore-Penrose Psuedo-inverse.
     """
 
     error = get_error_vec(points)
@@ -67,6 +74,10 @@ def get_velocity(
 def get_error_vec(points: List[List[float]]) -> np.ndarray:
     """
     returns an error vector given the observed corner features
+    
+    Supplementary notes:
+    --------------------
+    Eq.(1) in Chaumette et al.
     """
 
     reqPos = getRequiredPos()
