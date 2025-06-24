@@ -1,8 +1,54 @@
-""" servoing module """
+"""
+servoing module 
+--------
+
+Supplementary update:
+Jun 24 : Integrate SuperPoint feature detection
+
+"""
 
 import numpy as np
 import cv2
 from typing import List, Union, Tuple
+
+# ---- New functions BEGIN ----
+def get_SuperPoints(img_arr : np.ndarray) -> Tuple[Union[List , None], List]:
+    """
+    Detects SuperPoints in the given image
+    """
+    import sys
+    sys.path.append('../../LightGlue')
+
+    from lightglue import SuperPoint
+
+    # Initialize SuperPoint feature extractor
+    extractor = SuperPoint(max_num_keypoints=30) # 50
+    
+    # Convert image to grayscale and float32
+    if len(img_arr.shape) == 3:
+        gray = cv2.cvtColor(img_arr, cv2.COLOR_BGR2GRAY)
+    else:
+        gray = img_arr
+    gray = gray.astype(np.float32) / 255.0
+    
+    # Extract features
+    feats = extractor.extract(gray)
+    keypoints = feats['keypoints'].cpu().numpy()
+    
+    # Format output to match get_markers() interface
+    # Each keypoint becomes a "marker corner" with 1 point
+    marker_corners = []
+    marker_ids = []
+    
+    if len(keypoints) > 0:
+        # Convert each keypoint to the expected format: (1,1,2) array
+        marker_corners = [np.array([kp]).reshape(1,1,2) for kp in keypoints]
+        marker_ids = np.arange(len(keypoints)).reshape(-1,1)
+        
+    return marker_corners, marker_ids
+
+
+# ---- New functions END ----
 
 # NOTE: this implementation of visual servoing uses Aruco markers
 
