@@ -21,4 +21,4 @@ Modified by : King Hang Wong
 ## More details of usage
 Please visit the original repo. https://github.com/Varun0157/Image-Based-Visual-Servoing
 
-To-do : Fork this repo.
+To-do : Once this repo has proven to work, create a Fork.

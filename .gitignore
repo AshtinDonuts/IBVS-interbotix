@@ -1,4 +1,3 @@
+src/vid
 src/img
-src/__tmp
-src/__pycache__
-src/miniconda3
+src/static

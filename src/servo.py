@@ -34,17 +34,19 @@ def get_marker_corners(img_arr: np.ndarray) -> Union[List[List[float]], None]:
     """
     gets the corners of the marker in the given image
     """
+    # TODO: This is shitty implementation.
+    # get_markers() should be modified to return marker_corners[0], marker_ids[0] directly
     marker_corners, marker_ids = get_markers(img_arr)
     if not marker_corners:
         return None
-
     corners, ids = marker_corners[0], marker_ids[0]
+
     cv2.polylines(
         img_arr, [corners.astype(np.int32)], True, (0, 255, 255), 4, cv2.LINE_AA
     )
 
     corners = corners.reshape(4, 2)
-    corners = corners.astype(int)
+    corners = corners.astype(int)  # ?? why
 
     top_left = list(corners[0].ravel())
     top_right = list(corners[1].ravel())

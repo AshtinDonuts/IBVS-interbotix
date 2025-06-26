@@ -65,6 +65,8 @@ def get_velocity(
             for i in range(3)
         ]
     )
+    
+    # compute Penrose P-Inv
     J_pinv = np.linalg.pinv(J)
 
     vel = -LAMBDA * np.matmul(J_pinv, error)

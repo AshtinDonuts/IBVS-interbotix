@@ -12,40 +12,147 @@ import cv2
 from typing import List, Union, Tuple
 
 # ---- New functions BEGIN ----
+
+# Global configuration for SuperPoint
+SUPERPOINT_CONFIG = {
+    'max_num_keypoints': 30,
+    'keypoint_threshold': 0.005,
+    'remove_borders': 4
+}
+
+def configure_superpoint(max_keypoints: int = 30, keypoint_threshold: float = 0.005, 
+                        remove_borders: int = 4) -> None:
+    """
+    Configure SuperPoint parameters globally
+    
+    Args:
+        max_keypoints: Maximum number of keypoints to detect
+        keypoint_threshold: Minimum confidence threshold for keypoints
+        remove_borders: Border pixels to ignore
+    """
+    global SUPERPOINT_CONFIG
+    SUPERPOINT_CONFIG.update({
+        'max_num_keypoints': max_keypoints,
+        'keypoint_threshold': keypoint_threshold,
+        'remove_borders': remove_borders
+    })
+    
+    # Reset extractor to use new config
+    if hasattr(get_SuperPoints, '_extractor'):
+        delattr(get_SuperPoints, '_extractor')
+
 def get_SuperPoints(img_arr : np.ndarray) -> Tuple[Union[List , None], List]:
     """
     Detects SuperPoints in the given image
     """
     import sys
-    sys.path.append('../../LightGlue')
+    sys.path.append('../../LightGlue')  ## fix this
 
     from lightglue import SuperPoint
+    import torch
 
-    # Initialize SuperPoint feature extractor
-    extractor = SuperPoint(max_num_keypoints=30) # 50
+    # Initialize SuperPoint feature extractor (create once and reuse)
+    if not hasattr(get_SuperPoints, '_extractor'):
+        get_SuperPoints._extractor = SuperPoint(
+            max_num_keypoints=SUPERPOINT_CONFIG['max_num_keypoints'],
+            keypoint_threshold=SUPERPOINT_CONFIG['keypoint_threshold'],
+            remove_borders=SUPERPOINT_CONFIG['remove_borders']
+        )
+    
+    extractor = get_SuperPoints._extractor
     
     # Convert image to grayscale and float32
+    if img_arr is None:
+        return None, []
+    
     if len(img_arr.shape) == 3:
         gray = cv2.cvtColor(img_arr, cv2.COLOR_BGR2GRAY)
     else:
         gray = img_arr
-    gray = gray.astype(np.float32) / 255.0
+    
+    # Ensure image is in the correct format and convert to PyTorch tensor
+    if gray.dtype != np.float32:
+        gray = gray.astype(np.float32) / 255.0
+    
+    # Convert numpy array to PyTorch tensor
+    gray_tensor = torch.from_numpy(gray).unsqueeze(0)  # Add batch dimension
     
     # Extract features
-    feats = extractor.extract(gray)
-    keypoints = feats['keypoints'].cpu().numpy()
+    try:
+        feats = extractor.extract(gray_tensor)
+        keypoints = feats['keypoints'].cpu().numpy()
+    except Exception as e:
+        print(f"Error extracting SuperPoint features: {e}")
+        return None, []
     
     # Format output to match get_markers() interface
     # Each keypoint becomes a "marker corner" with 1 point
     marker_corners = []
     marker_ids = []
     
+    # Debug information
+    print(f"Debug: keypoints shape: {keypoints.shape if hasattr(keypoints, 'shape') else 'No shape'}")  ## (1, 30, 2)
+    print(f"Debug: keypoints type: {type(keypoints)}")
+    print(f"Debug: number of keypoints: {len(keypoints)}")
+    if len(keypoints) > 0:
+        print(f"Debug: first keypoint: {keypoints[0]}")
+    
+    # Reshape keypoint to expected format: (1, 30, 2) -> (30, 1, 2)
+    
+    
+
     if len(keypoints) > 0:
         # Convert each keypoint to the expected format: (1,1,2) array
         marker_corners = [np.array([kp]).reshape(1,1,2) for kp in keypoints]
         marker_ids = np.arange(len(keypoints)).reshape(-1,1)
-        
+
     return marker_corners, marker_ids
+
+
+def DO_NOT_USE_match_superpoints(img1: np.ndarray, img2: np.ndarray) -> Tuple[List, List, List]:
+    """
+    Match SuperPoint features between two images
+    
+    Args:
+        img1: First image
+        img2: Second image
+        
+    Returns:
+        Tuple of (matched_kpts1, matched_kpts2, match_scores)
+    """
+    try:
+        from lightglue import LightGlue, SuperPoint
+        
+        # Extract features from both images
+        kpts1, ids1 = get_SuperPoints(img1)
+        kpts2, ids2 = get_SuperPoints(img2)
+        
+        if not kpts1 or not kpts2:
+            return [], [], []
+        
+        # Convert to LightGlue format
+        feats1 = {'keypoints': kpts1[0].reshape(-1, 2), 'descriptors': None}
+        feats2 = {'keypoints': kpts2[0].reshape(-1, 2), 'descriptors': None}
+        
+        # Initialize matcher
+        matcher = LightGlue(features='superpoint')
+        
+        # Match features
+        matches = matcher.match(feats1, feats2)
+        
+        # Extract matched keypoints
+        matched_kpts1 = feats1['keypoints'][matches['matches'][:, 0]]
+        matched_kpts2 = feats2['keypoints'][matches['matches'][:, 1]]
+        scores = matches['scores']
+        
+        return matched_kpts1, matched_kpts2, scores
+        
+    except ImportError:
+        print("LightGlue not available for feature matching")
+        return [], [], []
+    except Exception as e:
+        print(f"Error in feature matching: {e}")
+        return [], [], []
 
 
 # ---- New functions END ----

@@ -2,6 +2,8 @@
 main IBVS module
 """
 
+import pdb
+
 import sys
 from time import sleep
 from typing import Tuple, List
@@ -22,8 +24,7 @@ def init_pybullet() -> int:
     """
     initialises the pybullet scene
     """
-    pclient = p.connect(p.GUI)
-    # pclient = p.connect(p.DIRECT)
+    pclient = p.connect(p.DIRECT)  # p.GUI for PyBullet interface
     p.setAdditionalSearchPath(pybullet_data.getDataPath())
     p.setGravity(0, 0, -10)
     # p.setRealTimeSimulation(True)
@@ -159,14 +160,23 @@ def capture_camera_image(
     # calculating the projection matrix
     projection_matrix = get_projection_matrix()
 
+
     # capturing the image
+    # -------------------
+    # p.getCameraImage
+    # width (int) – Width of the rendered image.
+    # height (int) – Height of the rendered image.
+    # rgbImg (list or np.array) – Color image data in RGBA format (depending on settings).
+    # depthImg (list or np.array) – Depth image data. The values are typically normalized between 0 and 1, unless a custom projection is used.
+    # segImg (list or np.array) – Segmentation mask. Contains object unique IDs
+
     img_details = p.getCameraImage(
         image_conf["width"],
         image_conf["height"],
         view_matrix,
         projection_matrix,
     )
-    return img_details
+    return img_details  # (width, height, rgbImg, depthImg, segImg)
 
 def update_pos_and_orn(
     transform: np.ndarray,
@@ -234,14 +244,16 @@ def main() -> None:
     _plane_id, _obstacles = init_scene(robot_pos)
 
     sleep(5)  # arbitrary sleep to let the scene load
+    
     for i in range(MAX_ITERATIONS):
         p.stepSimulation()
         robot_rot_matrix = get_robot_rotation_matrix(robot_orientation)  # what frame?
 
-        img = capture_camera_image(robot_pos, robot_rot_matrix)  # wxhx4 (or hxwx4)
+        ## img : (width, height, rgbImg, depthImg, segImg)
+        img = capture_camera_image(robot_pos, robot_rot_matrix) # ;pdb.set_trace()
 
         rgb_img_arr = convert_img_to_arr(
-            img[2], int(img_conf["height"]), int(img_conf["width"])
+            img[2], int(img_conf["height"]), int(img_conf["width"])  # Img[2]: (h x w x 4)
         )
 
         servo_points = get_marker_corners(rgb_img_arr)
