@@ -88,7 +88,6 @@ def get_SuperPoints(img_arr : np.ndarray) -> Tuple[Union[List , None], List]:
     # Format output to match get_markers() interface
     # Each keypoint becomes a "marker corner" with 1 point
     marker_corners = []
-    marker_ids = []
     
     # Debug information
     print(f"Debug: keypoints shape: {keypoints.shape if hasattr(keypoints, 'shape') else 'No shape'}")  ## (1, 30, 2)
@@ -103,12 +102,11 @@ def get_SuperPoints(img_arr : np.ndarray) -> Tuple[Union[List , None], List]:
     if len(keypoints) > 0:
         # marker_corners : List[np.array(1,1,2)] with len 30
         marker_corners = [np.array([kp]).reshape(1,1,2) for kp in keypoints]
-        marker_ids = np.arange(len(keypoints)).reshape(-1,1)
 
     # reshape into np.array(1, N, 2)
     marker_corners = np.array(marker_corners).reshape(1, -1, 2)
-
-    return marker_corners, marker_ids
+    
+    return marker_corners, None
 
 
 def DO_NOT_USE_match_superpoints(img1: np.ndarray, img2: np.ndarray) -> Tuple[List, List, List]:
@@ -161,7 +159,7 @@ def DO_NOT_USE_match_superpoints(img1: np.ndarray, img2: np.ndarray) -> Tuple[Li
 
 # NOTE: this implementation of visual servoing uses Aruco markers
 
-def get_markers(img_arr: np.ndarray) -> Tuple[Union[List, None], List]:
+def get_markers(img_arr: np.ndarray) -> Tuple[Union[List, None], Union[List]]:
     """
     gets the corner markers in the given image
     """
@@ -194,6 +192,8 @@ def get_marker_corners(img_arr: np.ndarray) -> Union[List[List[float]], None]:
     if not marker_corners:
         return None
     corners, _ = marker_corners, _
+
+    # FIXME : corners type int why? 
     cv2.polylines(
         img_arr, [corners.astype(np.int32)], True, (0, 255, 255), 4, cv2.LINE_AA
     )
@@ -213,3 +213,23 @@ def get_marker_corners(img_arr: np.ndarray) -> Union[List[List[float]], None]:
     )
 
     return points
+
+
+def test():
+
+    print('Running servo_new.py')
+
+    from pathlib import Path
+
+    # Get target / ref image pair
+    target_path=Path('/home/khw/Documents/6dpose/LightGlue/myassets/frame_000050_crop.png')
+
+    import cv2
+    target_img = cv2.imread(str(target_path))
+
+    # Verify images were loaded successfully
+    assert target_img is not None, f"Failed to load target image from {target_path}"
+
+    ret, _ = get_SuperPoints(target_img)
+    print(f'{ret.shape}')
+    
