@@ -98,13 +98,15 @@ def get_SuperPoints(img_arr : np.ndarray) -> Tuple[Union[List , None], List]:
         print(f"Debug: first keypoint: {keypoints[0]}")
     
     # Reshape keypoint to expected format: (1, 30, 2) -> (30, 1, 2)
-    
-    
+    keypoints = np.reshape(keypoints, (30, 1, 2))
 
     if len(keypoints) > 0:
-        # Convert each keypoint to the expected format: (1,1,2) array
+        # marker_corners : List[np.array(1,1,2)] with len 30
         marker_corners = [np.array([kp]).reshape(1,1,2) for kp in keypoints]
         marker_ids = np.arange(len(keypoints)).reshape(-1,1)
+
+    # reshape into np.array(1, N, 2)
+    marker_corners = np.array(marker_corners).reshape(1, -1, 2)
 
     return marker_corners, marker_ids
 
@@ -170,7 +172,7 @@ def get_markers(img_arr: np.ndarray) -> Tuple[Union[List, None], List]:
     gray_frame = cv2.cvtColor(img_arr, cv2.COLOR_BGR2GRAY)
     marker_corners, marker_ids, _ = detector.detectMarkers(gray_frame)
 
-    return marker_corners, marker_ids
+    return marker_corners[0], marker_ids[0]
 
 
 def mark_corners(img_arr: np.ndarray, points: List[List[int]]) -> np.ndarray:
@@ -187,11 +189,11 @@ def get_marker_corners(img_arr: np.ndarray) -> Union[List[List[float]], None]:
     """
     gets the corners of the marker in the given image
     """
-    marker_corners, marker_ids = get_markers(img_arr)
+
+    marker_corners, _ = get_markers(img_arr)
     if not marker_corners:
         return None
-
-    corners, ids = marker_corners[0], marker_ids[0]
+    corners, _ = marker_corners, _
     cv2.polylines(
         img_arr, [corners.astype(np.int32)], True, (0, 255, 255), 4, cv2.LINE_AA
     )
