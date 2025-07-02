@@ -10,8 +10,17 @@ Jun 24 : Integrate SuperPoint feature detection
 import numpy as np
 import cv2
 from typing import List, Union, Tuple
+import torch
+from pathlib import Path
 
-# ---- New functions BEGIN ----
+from servo import *   # methods from original script
+from lightglue import LightGlue, SuperPoint, DISK
+from lightglue.utils import load_image, rbd
+from lightglue import viz2d
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # 'mps', 'cpu'
+extractor = SuperPoint(max_num_keypoints=2048).eval().to(device)  # load the extractor
+matcher = LightGlue(features="superpoint").eval().to(device)
 
 # Global configuration for SuperPoint
 SUPERPOINT_CONFIG = {
@@ -45,11 +54,6 @@ def get_SuperPoints(img_arr : np.ndarray) -> Tuple[Union[List , None], List]:
     """
     Detects SuperPoints in the given image
     """
-    import sys
-    sys.path.append('../../LightGlue')  ## fix this
-
-    from lightglue import SuperPoint
-    import torch
 
     # Initialize SuperPoint feature extractor (create once and reuse)
     if not hasattr(get_SuperPoints, '_extractor'):
@@ -90,17 +94,18 @@ def get_SuperPoints(img_arr : np.ndarray) -> Tuple[Union[List , None], List]:
     marker_corners = []
     
     # Debug information
-    print(f"Debug: keypoints shape: {keypoints.shape if hasattr(keypoints, 'shape') else 'No shape'}")  ## (1, 30, 2)
-    print(f"Debug: keypoints type: {type(keypoints)}")
-    print(f"Debug: number of keypoints: {len(keypoints)}")
-    if len(keypoints) > 0:
-        print(f"Debug: first keypoint: {keypoints[0]}")
+    # print(f"Debug: keypoints shape: {keypoints.shape if hasattr(keypoints, 'shape') else 'No shape'}")  ## (1, 30, 2)
+    # print(f"Debug: keypoints type: {type(keypoints)}")
+    # print(f"Debug: number of keypoints: {len(keypoints)}")
+    # if len(keypoints) > 0:
+    #     print(f"Debug: first keypoint: {keypoints[0]}")
     
-    # Reshape keypoint to expected format: (1, 30, 2) -> (30, 1, 2)
-    keypoints = np.reshape(keypoints, (30, 1, 2))
+    # TODO : fix reshape transformation redundancies.
+    # Reshape keypoint to expected format: (1, n, 2) -> (n, 1, 2), n = min(n, 30)
+    keypoints = np.reshape(keypoints, (-1, 1, 2))
 
     if len(keypoints) > 0:
-        # marker_corners : List[np.array(1,1,2)] with len 30
+        # marker_corners : List[np.array(1,1,2)] : (n,)
         marker_corners = [np.array([kp]).reshape(1,1,2) for kp in keypoints]
 
     # reshape into np.array(1, N, 2)
@@ -109,111 +114,49 @@ def get_SuperPoints(img_arr : np.ndarray) -> Tuple[Union[List , None], List]:
     return marker_corners, None
 
 
-def DO_NOT_USE_match_superpoints(img1: np.ndarray, img2: np.ndarray) -> Tuple[List, List, List]:
+def match_superpoints(im0_path: Union[Path, str], im1_path: Union[Path, str]) -> Tuple[List, List, List]:
     """
     Match SuperPoint features between two images
-    
     Args:
-        img1: First image
-        img2: Second image
-        
+        Path object or str object path of either the two input images
     Returns:
         Tuple of (matched_kpts1, matched_kpts2, match_scores)
     """
-    try:
-        from lightglue import LightGlue, SuperPoint
-        
-        # Extract features from both images
-        kpts1, ids1 = get_SuperPoints(img1)
-        kpts2, ids2 = get_SuperPoints(img2)
-        
-        if not kpts1 or not kpts2:
-            return [], [], []
-        
-        # Convert to LightGlue format
-        feats1 = {'keypoints': kpts1[0].reshape(-1, 2), 'descriptors': None}
-        feats2 = {'keypoints': kpts2[0].reshape(-1, 2), 'descriptors': None}
-        
-        # Initialize matcher
-        matcher = LightGlue(features='superpoint')
-        
-        # Match features
-        matches = matcher.match(feats1, feats2)
-        
-        # Extract matched keypoints
-        matched_kpts1 = feats1['keypoints'][matches['matches'][:, 0]]
-        matched_kpts2 = feats2['keypoints'][matches['matches'][:, 1]]
-        scores = matches['scores']
-        
-        return matched_kpts1, matched_kpts2, scores
-        
-    except ImportError:
-        print("LightGlue not available for feature matching")
-        return [], [], []
-    except Exception as e:
-        print(f"Error in feature matching: {e}")
-        return [], [], []
+    image0 = load_image(im0_path)
+    image1 = load_image(im1_path)
 
+    feats0 = extractor.extract(image0.to(device))
+    feats1 = extractor.extract(image1.to(device))
+    matches01 = matcher({"image0": feats0, "image1": feats1})
+    feats0, feats1, matches01 = [
+        rbd(x) for x in [feats0, feats1, matches01]
+    ]  # remove batch dimension
 
-# ---- New functions END ----
+    kpts0, kpts1, matches = feats0["keypoints"], feats1["keypoints"], matches01["matches"]
+    
+    # matched subset of kpts
+    # It is implicit same rows in m_kpts0, m_kpts1 are matches.
+    m_kpts0, m_kpts1 = kpts0[matches[..., 0]], kpts1[matches[..., 1]]
 
-# NOTE: this implementation of visual servoing uses Aruco markers
+    return m_kpts0, m_kpts1
 
-def get_markers(img_arr: np.ndarray) -> Tuple[Union[List, None], Union[List]]:
-    """
-    gets the corner markers in the given image
-    """
-    # detect the aruco marker in the image
-    marker_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_1000)
-    param_markers = cv2.aruco.DetectorParameters()
-    detector = cv2.aruco.ArucoDetector(marker_dict, param_markers)
-    gray_frame = cv2.cvtColor(img_arr, cv2.COLOR_BGR2GRAY)
-    marker_corners, marker_ids, _ = detector.detectMarkers(gray_frame)
+def _compute_distances(m_kpts0: np.ndarray, m_kpts1: np.ndarray):
+    raise NotImplemented
 
-    return marker_corners[0], marker_ids[0]
+# TODO
+def compute_motion_vector(m_kpts0, m_mpts1):
+    matched_distances = _compute_distances(...)
+    
+    def _compute_mean(dist):
+        raise NotImplemented
+    
+    avg_motion_vec = _compute_mean(matched_distances)
+    
+    return avg_motion_vec
 
-
-def mark_corners(img_arr: np.ndarray, points: List[List[int]]) -> np.ndarray:
-    """
-    marks circles on the given points
-    """
-    for point in points:
-        cv2.circle(img_arr, tuple(point), 5, (255, 255, 255), 3)
-
-    return img_arr
-
-
-def get_marker_corners(img_arr: np.ndarray) -> Union[List[List[float]], None]:
-    """
-    gets the corners of the marker in the given image
-    """
-
-    marker_corners, _ = get_markers(img_arr)
-    if not marker_corners:
-        return None
-    corners, _ = marker_corners, _
-
-    # FIXME : corners type int why? 
-    cv2.polylines(
-        img_arr, [corners.astype(np.int32)], True, (0, 255, 255), 4, cv2.LINE_AA
-    )
-
-    corners = corners.reshape(4, 2)
-    corners = corners.astype(int)
-
-    top_left = list(corners[0].ravel())
-    top_right = list(corners[1].ravel())
-    bottom_right = list(corners[2].ravel())
-    bottom_left = list(corners[3].ravel())
-
-    # we have to ensure the points always follow a fixed order for accurate error calc
-    points = sorted(
-        [top_left, top_right, bottom_left, bottom_right],
-        key=lambda point: (point[0], point[1]),
-    )
-
-    return points
-
+##
+#--------------
+### Remaining are test functions
 
 def test():
 
@@ -232,4 +175,6 @@ def test():
 
     ret, _ = get_SuperPoints(target_img)
     print(f'{ret.shape}')
-    
+
+if __name__ == '__main__':
+    test()
