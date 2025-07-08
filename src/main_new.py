@@ -12,19 +12,25 @@ import pybullet as p
 import pybullet_data
 
 import numpy as np
+from pathlib import Path
 
 from image import convert_img_to_arr, save_image, get_image_config
-from servo import get_marker_corners, mark_corners
+from servo import get_marker_corners
 from motion import get_error_mag, get_error_vec, get_velocity
 
+from servo_new import match_superpoints
+from motion_new import get_error_mag, get_error_vec_K, sample_points, get_velocity_K_points
+
+
 MAX_ITERATIONS = int(1e3)
+TARGET_PATH=Path('/home/khw/Documents/6dpose/LightGlue/myassets/frame_000050_crop.png')
 
 
 def init_pybullet() -> int:
     """
     initialises the pybullet scene
     """
-    pclient = p.connect(p.DIRECT)  # p.GUI for PyBullet interface
+    pclient = p.connect(p.DIRECT)  # p.GUI/p.DIRECT 
     p.setAdditionalSearchPath(pybullet_data.getDataPath())
     p.setGravity(0, 0, -10)
     # p.setRealTimeSimulation(True)
@@ -36,7 +42,7 @@ def set_aruco_marker_texture(obstacle_id: int) -> None:
     """
     sets the aruco marker texture on the obstacle
     """
-    texture_id = p.loadTexture("static/aruco_marker.png")
+    texture_id = p.loadTexture(str(TARGET_PATH))
     p.changeVisualShape(obstacle_id, -1, textureUniqueId=texture_id)
 
 
@@ -252,27 +258,36 @@ def main() -> None:
         ## img : (width, height, rgbImg, depthImg, segImg)
         img = capture_camera_image(robot_pos, robot_rot_matrix) # ;pdb.set_trace()
 
-        rgb_img_arr = convert_img_to_arr(
+        rgba_arr = convert_img_to_arr(
             img[2], int(img_conf["height"]), int(img_conf["width"])  # Img[2]: (h x w x 4)
         )
+        rgb_img_arr = rgba_arr[:, :, :3]  # remove alpha channel [..,4] -> [..,3]
 
-        servo_points = get_marker_corners(rgb_img_arr)
-        # img_arr = mark_corners(img_arr, points) # uncomment this line to mark corners of marker
+        # remove batch dim [1, 500, 800, 3] -> [500, 800, 3]
+        if rgb_img_arr.ndim == 4: rgb_img_arr = rgb_img_arr[0]
 
-        if not servo_points:
-            error = None
-            save_image(error, i, rgb_img_arr, MIN_ERROR)
-            print("no aruco marker detected, rotating")
+        src_kpts, tgt_kpts = match_superpoints(
+            rgb_img_arr, TARGET_PATH
+        )
+        print(f"number of SuperPoints detected: {len(src_kpts)} vs {len(tgt_kpts)}")
+        pdb.set_trace()
+        # if no SuperPoints detected, skip current iteration.
+        if src_kpts is None or tgt_kpts is None:
+            print("no SuperPoints detected, rotating")
             robot_orientation[2] += np.pi / 18
             continue
 
+        # print(f"src_kpts: {src_kpts}, tgt_kpts: {tgt_kpts}")
+        K_sample_src, K_sample_tgt = sample_points(src_kpts, tgt_kpts, K=3)
+
         # get the error, save the image, update the minimum error
-        error = get_error_mag(get_error_vec(servo_points))
+        error = get_error_mag(get_error_vec_K(K_sample_src, K_sample_tgt))
+
         save_image(error, i, rgb_img_arr, MIN_ERROR)
         update_error(error, i=i)
 
         # get the velocity, transform vector, and update position and orientation
-        velocity = get_velocity(points=servo_points, depth_buffer=img[3])
+        velocity = get_velocity_K_points(K_sample_src, K_sample_tgt, depth_buffer=img[3])
         transform = get_transformation_matrix(robot_pos, robot_rot_matrix)
 
         robot_pos, robot_orientation = update_pos_and_orn(
