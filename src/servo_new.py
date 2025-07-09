@@ -135,7 +135,7 @@ def match_superpoints(im0: Union[Path, np.ndarray], im1: Union[Path, np.ndarray]
 
             return im
 
-        elif isinstance(im, Path):
+        elif isinstance(im, Path) or isinstance(im, str):
             im_path = str(im)
             if im_path.endswith('.jpg') or im_path.endswith('.png'):
                 return load_image(im_path, resize_HW)
@@ -145,17 +145,22 @@ def match_superpoints(im0: Union[Path, np.ndarray], im1: Union[Path, np.ndarray]
             raise ValueError(f"Unsupported input type: {type(im)}")
 
     # Load images
-    # TODO: fix broken resize function.
     image0, image1 = load_im(im0, (480, 640)), load_im(im1, (480, 640))
 
-    print(f'image0: {image0.shape}, image1: {image1.shape}')
-    print(f'image0: {image0.dtype}, image1: {image1.dtype}')
+    # for debug
+    # print(f'image0: {image0.shape}, image1: {image1.shape}')
+    # print(f'image0: {image0.dtype}, image1: {image1.dtype}')
 
-    # TODO: feats0 len is 0 ; feats1 works.
+    # TODO: bug - feats0 length mismatch w ipynb
     feats0 = extractor.extract(image0.to(device))
     feats1 = extractor.extract(image1.to(device))
+    # pdb.set_trace()
 
-    pdb.set_trace()
+    with open('dist_img/src_kpts_count.txt', 'a') as f:
+        f.write(f"Number of features in feats0: {feats0['keypoints'].shape}\n")
+        f.write(f"Number of features in feats1: {feats1['keypoints'].shape}\n")
+
+    # pdb.set_trace()
 
     matches01 = matcher({"image0": feats0, "image1": feats1})
     feats0, feats1, matches01 = [

@@ -240,10 +240,10 @@ def simple_forward() -> None:
     """Move robot forward"""
     _ = init_pybullet()
     img_conf = get_image_config()
-    dt: float = 0.02  # 0.0001
+    dt: float = 0.05  # 0.0001
 
     # initialise the robot position and orientation (arbitrary)
-    robot_pos = [1.0, 0, 1.0]  # [0, 0, 1]
+    robot_pos = [0, 0, 1.0]  # [0, 0, 1]   # only z matters as target offsets from cam
     robot_orientation = [0, 0, 0]
     # robot_orientation = [0, 0, 0 - np.pi / 10]
 
@@ -269,7 +269,10 @@ def simple_forward() -> None:
         )
         rgb_img_arr = rgba_arr[:, :, :3]  # remove alpha channel [..,4] -> [..,3]
 
-        cv2.imwrite(f'dist_img/distance_image_{i}.png', cv2.cvtColor(rgb_img_arr, cv2.COLOR_RGB2BGR))
+        # TODO: low priority : directly loading from PyBullet didn't work somehow
+        # currently patchwork is to call lightglue utils.load_image() from local directory.
+        save_impath = f'dist_img/distance_image_{i}.png'
+        cv2.imwrite(save_impath, cv2.cvtColor(rgb_img_arr, cv2.COLOR_RGB2BGR))
 
         # pdb.set_trace()
 
@@ -278,11 +281,11 @@ def simple_forward() -> None:
             rgb_img_arr = rgb_img_arr[0]
 
         src_kpts, tgt_kpts = match_superpoints(
-            rgb_img_arr, TARGET_PATH
+            save_impath, TARGET_PATH
         )
+        assert len(src_kpts) == len(tgt_kpts), "bug in match-superpoints()"
         # pdb.set_trace()
 
-        # move robot position forward
         speed = 1
         robot_pos = [robot_pos[0], robot_pos[1] + speed * dt, robot_pos[2]]
 
@@ -291,7 +294,7 @@ def simple_forward() -> None:
         # log the number of source keypoints detected
         num_src_kpts = len(src_kpts) if src_kpts is not None else 0
         with open('dist_img/src_kpts_count.txt', 'a') as f:
-            f.write(f"Iteration {i}: {num_src_kpts} source keypoints detected, robot position: {robot_pos}\n")
+            f.write(f"Iteration {i}: {num_src_kpts} matching keypoints detected, robot position: {robot_pos}\n")
 
 
 def main() -> None:
