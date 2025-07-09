@@ -21,6 +21,8 @@ from motion import get_error_mag, get_error_vec, get_velocity
 from servo_new import match_superpoints
 from motion_new import get_error_mag, get_error_vec_K, sample_points, get_velocity_K_points
 
+import cv2
+
 
 MAX_ITERATIONS = int(1e3)
 TARGET_PATH=Path('/home/khw/Documents/6dpose/LightGlue/myassets/frame_000050_crop.png')
@@ -37,7 +39,6 @@ def init_pybullet() -> int:
 
     return pclient
 
-
 def set_aruco_marker_texture(obstacle_id: int) -> None:
     """
     sets the aruco marker texture on the obstacle
@@ -46,6 +47,7 @@ def set_aruco_marker_texture(obstacle_id: int) -> None:
     p.changeVisualShape(obstacle_id, -1, textureUniqueId=texture_id)
 
 
+# TODO: change scene target block offset values
 def init_scene(robot_pos: list[float]) -> Tuple[int, List[int]]:
     """
     initialises the scene and returns created objects
@@ -57,7 +59,7 @@ def init_scene(robot_pos: list[float]) -> Tuple[int, List[int]]:
     base_orn = p.getQuaternionFromEuler([0, 0, 0])
     obstacles = []
     for z_offset in [0, 1]:
-        for y_offset in [7.5]:
+        for y_offset in [2.0]:  # 7.5
             for x_offset in [0, -1, 1]:
                 obstacles.append(
                     p.loadURDF(
@@ -234,6 +236,63 @@ def update_error(error_mag: float, i: int | None = None) -> None:
         p.disconnect()
         sys.exit(0)
 
+def simple_forward() -> None:
+    """Move robot forward"""
+    _ = init_pybullet()
+    img_conf = get_image_config()
+    dt: float = 0.02  # 0.0001
+
+    # initialise the robot position and orientation (arbitrary)
+    robot_pos = [1.0, 0, 1.0]  # [0, 0, 1]
+    robot_orientation = [0, 0, 0]
+    # robot_orientation = [0, 0, 0 - np.pi / 10]
+
+    _plane_id, _obstacles = init_scene(robot_pos)
+    sleep(2)  # scene load buffer
+
+    # wipe all files in dist_img directory
+    import os, shutil
+    if os.path.exists('dist_img'):
+        shutil.rmtree('dist_img')
+    os.makedirs('dist_img')
+
+    for i in range(30):
+        p.stepSimulation()
+        robot_rot_matrix = get_robot_rotation_matrix(robot_orientation)  # what frame?
+
+        ## img : (width, height, rgbImg, depthImg, segImg)
+        img = capture_camera_image(robot_pos, robot_rot_matrix)
+
+        rgba = img[2]  # Img[2]: (h x w x 4)
+        rgba_arr = convert_img_to_arr(
+            rgba, int(img_conf["height"]), int(img_conf["width"])  # Img[2]: (h x w x 4)
+        )
+        rgb_img_arr = rgba_arr[:, :, :3]  # remove alpha channel [..,4] -> [..,3]
+
+        cv2.imwrite(f'dist_img/distance_image_{i}.png', cv2.cvtColor(rgb_img_arr, cv2.COLOR_RGB2BGR))
+
+        # pdb.set_trace()
+
+        # remove batch dim [1, 500, 800, 3] -> [500, 800, 3]
+        if rgb_img_arr.ndim == 4:
+            rgb_img_arr = rgb_img_arr[0]
+
+        src_kpts, tgt_kpts = match_superpoints(
+            rgb_img_arr, TARGET_PATH
+        )
+        # pdb.set_trace()
+
+        # move robot position forward
+        speed = 1
+        robot_pos = [robot_pos[0], robot_pos[1] + speed * dt, robot_pos[2]]
+
+        sleep(0.01)  # arbitrary sleep to let the changes take place
+
+        # log the number of source keypoints detected
+        num_src_kpts = len(src_kpts) if src_kpts is not None else 0
+        with open('dist_img/src_kpts_count.txt', 'a') as f:
+            f.write(f"Iteration {i}: {num_src_kpts} source keypoints detected, robot position: {robot_pos}\n")
+
 
 def main() -> None:
     """
@@ -245,7 +304,7 @@ def main() -> None:
 
     # initialise the robot position and orientation (arbitrary)
     robot_pos = [0, 0, 1.0]
-    robot_orientation = [0, 0, 0 - np.pi / 3]
+    robot_orientation = [0, 0, 0 - np.pi / 10]
 
     _plane_id, _obstacles = init_scene(robot_pos)
 
@@ -256,15 +315,23 @@ def main() -> None:
         robot_rot_matrix = get_robot_rotation_matrix(robot_orientation)  # what frame?
 
         ## img : (width, height, rgbImg, depthImg, segImg)
-        img = capture_camera_image(robot_pos, robot_rot_matrix) # ;pdb.set_trace()
+        img = capture_camera_image(robot_pos, robot_rot_matrix)
 
+        rgba = img[2]  # Img[2]: (h x w x 4)
         rgba_arr = convert_img_to_arr(
-            img[2], int(img_conf["height"]), int(img_conf["width"])  # Img[2]: (h x w x 4)
+            rgba, int(img_conf["height"]), int(img_conf["width"])  # Img[2]: (h x w x 4)
         )
         rgb_img_arr = rgba_arr[:, :, :3]  # remove alpha channel [..,4] -> [..,3]
 
+        # Save current rgb image as png
+        import cv2
+        cv2.imwrite(f'rgb_img_{i}.png', cv2.cvtColor(rgb_img_arr, cv2.COLOR_RGB2BGR))
+
+        pdb.set_trace()
+
         # remove batch dim [1, 500, 800, 3] -> [500, 800, 3]
-        if rgb_img_arr.ndim == 4: rgb_img_arr = rgb_img_arr[0]
+        if rgb_img_arr.ndim == 4:
+            rgb_img_arr = rgb_img_arr[0]
 
         src_kpts, tgt_kpts = match_superpoints(
             rgb_img_arr, TARGET_PATH
@@ -298,4 +365,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    # main()
+    simple_forward()
