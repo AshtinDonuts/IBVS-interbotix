@@ -71,7 +71,8 @@ def get_velocity_K_points(
             jacobian(  ## int(.) rounds to pixel pos
                 X=int(K_sample_mkpts0[i][0]),
                 Y=int(K_sample_mkpts0[i][1]),
-                Z=(depth_buffer[int(K_sample_mkpts0[i][0])][int(K_sample_mkpts0[i][1])]),  # Get depth at x,y
+                # Z=(depth_buffer[int(K_sample_mkpts0[i][0])][int(K_sample_mkpts0[i][1])]),  # Get depth at x,y # TODO: fix bug
+                Z=(depth_buffer[int(K_sample_mkpts0[i][1])][int(K_sample_mkpts0[i][0])]),  # switched X, Y 
             )
             for i in range(K) 
         ]
@@ -83,3 +84,27 @@ def get_velocity_K_points(
     # 6D velocity vector : [linear, angular]
     vel = -LAMBDA * np.matmul(J_pinv, error)
     return vel
+
+
+##################
+# Implementing ROBOTAP type linearm motion
+##################
+
+def get_linear_vel(K_sample_mkpts0: Union[List[List[float]], np.ndarray], K_sample_mkpts1: Union[List[List[float]], np.ndarray],
+                    ) -> np.ndarray:
+    # Convert inputs to numpy arrays if they aren't already
+    mkpts0 = np.array(K_sample_mkpts0.cpu())
+    mkpts1 = np.array(K_sample_mkpts1.cpu())
+
+    # Calculate displacement vectors between corresponding points
+    displacements = mkpts1 - mkpts0  # Shape: (K, 2)
+
+    # Average the displacement vectors
+    mean_displacement = np.mean(displacements, axis=0)  # Shape: (2,)
+
+    # Create 6D velocity vector with zeros for angular velocities
+    vel = np.zeros(6)
+    vel[0] = mean_displacement[1]  # x (left-right) from image x
+    vel[2] = mean_displacement[0]  # z (up-down) from image y
+
+    return vel * 3.0    #
