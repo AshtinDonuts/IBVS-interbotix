@@ -97,14 +97,23 @@ def get_linear_vel(K_sample_mkpts0: Union[List[List[float]], np.ndarray], K_samp
     mkpts1 = np.array(K_sample_mkpts1.cpu())
 
     # Calculate displacement vectors between corresponding points
-    displacements = mkpts1 - mkpts0  # Shape: (K, 2)
+    displacements = mkpts1 - mkpts0  # [ horizontal, vertical]
 
     # Average the displacement vectors
     mean_displacement = np.mean(displacements, axis=0)  # Shape: (2,)
 
     # Create 6D velocity vector with zeros for angular velocities
     vel = np.zeros(6)
-    vel[0] = mean_displacement[1]  # x (left-right) from image x
-    vel[2] = mean_displacement[0]  # z (up-down) from image y
+    
+    # this is actual
+    vel[0] = mean_displacement[0]  # x (left-right)
+    vel[2] = -1 * mean_displacement[1]  # z (top-down)
 
-    return vel * 3.0    #
+    # flip to move camera (robot) relative to scene
+    vel[0] = -1 * vel[0]
+    vel[2] = -1 * vel[2]
+
+    ## arbitrary forward motion
+    vel[1] = 1 * 0.1
+
+    return vel * 2.0    #
