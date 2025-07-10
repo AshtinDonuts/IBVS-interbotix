@@ -5,14 +5,16 @@ from tkinter import N
 from motion import *  # append original methods
 import numpy as np
 from typing import List, Union
+import torch
 
 from pathlib import Path
 TARGET_PATH = Path('/home/khw/Documents/6dpose/LightGlue/myassets/frame_000050_crop.png')
 REF_PATH = Path('/home/khw/Documents/6dpose/LightGlue/myassets/frame_000061_crop.png')
 
+import pdb
 
-def get_error_vec_K(K_sample_mkpts0: Union[List[List[float]], np.ndarray], 
-                    K_sample_mkpts1: Union[List[List[float]], np.ndarray]) -> np.ndarray:
+def get_error_vec_K(K_sample_mkpts0: torch.Tensor, 
+                    K_sample_mkpts1: torch.Tensor) -> np.ndarray:
     """
     returns an error vector given the observed corner features
     shape : (n x 2)
@@ -22,18 +24,20 @@ def get_error_vec_K(K_sample_mkpts0: Union[List[List[float]], np.ndarray],
     Eq.(1) in Chaumette et al.
     Note the target image is now constantly a constantly changing video feed.
     """
-    K_mkpts0, K_mkpts1 = np.array(K_sample_mkpts0), np.array(K_sample_mkpts1)
+    K_mkpts0, K_mkpts1 = np.array(K_sample_mkpts0.cpu()), np.array(K_sample_mkpts1.cpu())
     # error = K_mkpts1 - K_mkpts0
     error = np.array([K_mkpts0[i][j] - K_mkpts1[i][j] for i in range(3) for j in range(2)])
     return error
 
-def sample_points(source_mkpts, target_mkpts, K=3):
-    """ Uniformly sample K indices from the source and target keypoints."""
+def sample_points(source_mkpts:torch.Tensor, target_mkpts:torch.Tensor, K=3):
+    """ Uniformly sample K indices from the source and target keypoints.
+    
+    returns: torch.Tensor """
     import random
     K_sampled_indices = random.sample(range(0, len(source_mkpts)), K)
 
-    K_sample_mkpts0 = [source_mkpts[idx] for idx in K_sampled_indices]
-    K_sample_mkpts1 = [target_mkpts[idx] for idx in K_sampled_indices]
+    K_sample_mkpts0 = source_mkpts[K_sampled_indices]
+    K_sample_mkpts1 = target_mkpts[K_sampled_indices]
 
     return K_sample_mkpts0, K_sample_mkpts1
 

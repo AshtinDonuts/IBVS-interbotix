@@ -24,15 +24,16 @@ from motion_new import get_error_mag, get_error_vec_K, sample_points, get_veloci
 import cv2
 
 
-MAX_ITERATIONS = int(1e3)
+MAX_ITERATIONS = 100
 TARGET_PATH=Path('/home/khw/Documents/6dpose/LightGlue/myassets/frame_000050_crop.png')
+K = 3
 
 
 def init_pybullet() -> int:
     """
     initialises the pybullet scene
     """
-    pclient = p.connect(p.DIRECT)  # p.GUI/p.DIRECT 
+    pclient = p.connect(p.GUI)  # p.GUI/p.DIRECT 
     p.setAdditionalSearchPath(pybullet_data.getDataPath())
     p.setGravity(0, 0, -10)
     # p.setRealTimeSimulation(True)
@@ -58,8 +59,9 @@ def init_scene(robot_pos: list[float]) -> Tuple[int, List[int]]:
     base = robot_pos  # for now
     base_orn = p.getQuaternionFromEuler([0, 0, 0])
     obstacles = []
-    for z_offset in [0, 1]:
-        for y_offset in [2.0]:  # 7.5
+    ## builds a wall of cubes
+    for z_offset in [0, 1]: 
+        for y_offset in [4]:  # 7.5
             for x_offset in [0, -1, 1]:
                 obstacles.append(
                     p.loadURDF(
@@ -74,7 +76,8 @@ def init_scene(robot_pos: list[float]) -> Tuple[int, List[int]]:
                     )
                 )
 
-    goal_obs_id = obstacles[0]  # taking the 0th as the goal
+    # texture the first cube (set as goal)
+    goal_obs_id = obstacles[0]
     set_aruco_marker_texture(goal_obs_id)
 
     return plane_id, obstacles
@@ -209,7 +212,7 @@ def update_pos_and_orn(
 
 
 MIN_ERROR = float("inf")
-ERROR_GROWTH_LIMIT = 0.05  # 5%
+ERROR_GROWTH_LIMIT = 0.90  # 5%
 
 
 def update_error(error_mag: float, i: int | None = None) -> None:
@@ -236,7 +239,7 @@ def update_error(error_mag: float, i: int | None = None) -> None:
         p.disconnect()
         sys.exit(0)
 
-def simple_forward() -> None:
+def _simple_forward() -> None:
     """Move robot forward"""
     _ = init_pybullet()
     img_conf = get_image_config()
@@ -244,10 +247,10 @@ def simple_forward() -> None:
 
     # initialise the robot position and orientation (arbitrary)
     robot_pos = [0, 0, 1.0]  # [0, 0, 1]   # only z matters as target offsets from cam
-    robot_orientation = [0, 0, 0]
-    # robot_orientation = [0, 0, 0 - np.pi / 10]
+    # robot_orientation = [0, 0, 0]
+    robot_orientation = [0, 0, 0 - np.pi / 10]
 
-    _plane_id, _obstacles = init_scene(robot_pos)
+    _, _ = init_scene(robot_pos)
     sleep(2)  # scene load buffer
 
     # wipe all files in dist_img directory
@@ -269,8 +272,7 @@ def simple_forward() -> None:
         )
         rgb_img_arr = rgba_arr[:, :, :3]  # remove alpha channel [..,4] -> [..,3]
 
-        # TODO: low priority : directly loading from PyBullet didn't work somehow
-        # currently patchwork is to call lightglue utils.load_image() from local directory.
+        # TODO : modify to get image from pybullet
         save_impath = f'dist_img/distance_image_{i}.png'
         cv2.imwrite(save_impath, cv2.cvtColor(rgb_img_arr, cv2.COLOR_RGB2BGR))
 
@@ -307,11 +309,11 @@ def main() -> None:
 
     # initialise the robot position and orientation (arbitrary)
     robot_pos = [0, 0, 1.0]
-    robot_orientation = [0, 0, 0 - np.pi / 10]
+    robot_orientation = [0, 0, 0 - np.pi / 2]
 
-    _plane_id, _obstacles = init_scene(robot_pos)
+    _, _ = init_scene(robot_pos)
 
-    sleep(5)  # arbitrary sleep to let the scene load
+    sleep(1)  # arbitrary sleep to let the scene load
     
     for i in range(MAX_ITERATIONS):
         p.stepSimulation()
@@ -326,35 +328,35 @@ def main() -> None:
         )
         rgb_img_arr = rgba_arr[:, :, :3]  # remove alpha channel [..,4] -> [..,3]
 
-        # Save current rgb image as png
-        import cv2
-        cv2.imwrite(f'rgb_img_{i}.png', cv2.cvtColor(rgb_img_arr, cv2.COLOR_RGB2BGR))
-
-        pdb.set_trace()
-
-        # remove batch dim [1, 500, 800, 3] -> [500, 800, 3]
-        if rgb_img_arr.ndim == 4:
-            rgb_img_arr = rgb_img_arr[0]
+        # save_impath = f'dist_img/distance_image_{i}.png'
+        save_impath = f'dist_img/_temp_image.png'
+        cv2.imwrite(save_impath, cv2.cvtColor(rgb_img_arr, cv2.COLOR_RGB2BGR))
 
         src_kpts, tgt_kpts = match_superpoints(
-            rgb_img_arr, TARGET_PATH
+            save_impath, TARGET_PATH
         )
-        print(f"number of SuperPoints detected: {len(src_kpts)} vs {len(tgt_kpts)}")
-        pdb.set_trace()
-        # if no SuperPoints detected, skip current iteration.
-        if src_kpts is None or tgt_kpts is None:
+        assert len(src_kpts) == len(tgt_kpts), "bug in match-superpoints()"
+
+        # print(f"number of SuperPoints detected: {len(src_kpts)} vs {len(tgt_kpts)}")
+
+        # if no SuperPoints detected, skip iter and keep rotating
+        if src_kpts is None or tgt_kpts is None or len(src_kpts) < K:
             print("no SuperPoints detected, rotating")
             robot_orientation[2] += np.pi / 18
+            save_image(None, i, rgb_img_arr, MIN_ERROR)
+
             continue
 
-        # print(f"src_kpts: {src_kpts}, tgt_kpts: {tgt_kpts}")
-        K_sample_src, K_sample_tgt = sample_points(src_kpts, tgt_kpts, K=3)
+        K_sample_src, K_sample_tgt = sample_points(src_kpts, tgt_kpts, K)
 
-        # get the error, save the image, update the minimum error
         error = get_error_mag(get_error_vec_K(K_sample_src, K_sample_tgt))
 
+        # save image with error printed on it.
         save_image(error, i, rgb_img_arr, MIN_ERROR)
-        update_error(error, i=i)
+
+        ## turn this on
+        if 0:
+            update_error(error, i=i)
 
         # get the velocity, transform vector, and update position and orientation
         velocity = get_velocity_K_points(K_sample_src, K_sample_tgt, depth_buffer=img[3])
@@ -366,7 +368,10 @@ def main() -> None:
 
         sleep(0.01)  # arbitrary sleep to let the changes take place
 
+    p.disconnect()
+    sys.exit(0)
+
 
 if __name__ == "__main__":
-    # main()
-    simple_forward()
+    main()
+    # simple_forward()
