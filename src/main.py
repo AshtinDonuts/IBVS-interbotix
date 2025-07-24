@@ -24,7 +24,7 @@ def init_pybullet() -> int:
     """
     initialises the pybullet scene
     """
-    pclient = p.connect(p.DIRECT)  # p.GUI for PyBullet interface
+    pclient = p.connect(p.GUI)  # p.GUI for PyBullet interface
     p.setAdditionalSearchPath(pybullet_data.getDataPath())
     p.setGravity(0, 0, -10)
     # p.setRealTimeSimulation(True)
@@ -51,7 +51,7 @@ def init_scene(robot_pos: list[float]) -> Tuple[int, List[int]]:
     base_orn = p.getQuaternionFromEuler([0, 0, 0])
     obstacles = []
     for z_offset in [0, 1]:
-        for y_offset in [7.5]:
+        for y_offset in [4]:
             for x_offset in [0, -1, 1]:
                 obstacles.append(
                     p.loadURDF(

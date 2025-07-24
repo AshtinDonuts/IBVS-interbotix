@@ -15,8 +15,8 @@ def get_image_config() -> Dict[str, Union[int, float]]:
     returns the image configuration
     """
 
-    WIDTH = 800
-    HEIGHT = 500
+    WIDTH = 640  # 800
+    HEIGHT = 480  # 500
     FOV = 90
     NEAR_VAL = 0.01
     FAR_VAL = 100

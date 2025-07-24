@@ -122,6 +122,7 @@ def match_superpoints(im0: Union[Path, np.ndarray], im1: Union[Path, np.ndarray]
     def load_im(im: Union[Path, np.ndarray], resize_HW: Union[Tuple[int, int] | None] = None) -> torch.Tensor:
         """ Load image from Path or convert numpy array to tensor """
 
+        # to-do: fix this
         if isinstance(im, np.ndarray):
             assert im.ndim == 3, "...Expected image to be a 3D array (H, W, C)."
             # convert from [H x W x C] to [C x H x W]
@@ -154,11 +155,15 @@ def match_superpoints(im0: Union[Path, np.ndarray], im1: Union[Path, np.ndarray]
     # TODO: bug - feats0 length mismatch w ipynb
     feats0 = extractor.extract(image0.to(device))
     feats1 = extractor.extract(image1.to(device))
+
+    print(f"Number of features in feats0: {feats0['keypoints'].shape}")
+    print(f"Number of features in feats1: {feats1['keypoints'].shape}")
+
     # pdb.set_trace()
 
-    with open('dist_img/src_kpts_count.txt', 'a') as f:
-        f.write(f"Number of features in feats0: {feats0['keypoints'].shape}\n")
-        f.write(f"Number of features in feats1: {feats1['keypoints'].shape}\n")
+    # with open('dist_img/src_kpts_count.txt', 'a') as f:
+    #     f.write(f"Number of features in feats0: {feats0['keypoints'].shape}\n")
+    #     f.write(f"Number of features in feats1: {feats1['keypoints'].shape}\n")
 
     # pdb.set_trace()
 

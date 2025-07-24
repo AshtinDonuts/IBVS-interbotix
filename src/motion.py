@@ -8,7 +8,7 @@ from typing import List
 
 from servo import get_marker_corners
 
-LAMBDA = 1  ## Modifiable param
+LAMBDA = 1  ##
 required_pos = None
 
 
@@ -69,6 +69,7 @@ def get_velocity(
     # compute Penrose P-Inv
     J_pinv = np.linalg.pinv(J)
 
+    # 6D velocity vector : [linear, angular]
     vel = -LAMBDA * np.matmul(J_pinv, error)
     return vel
 

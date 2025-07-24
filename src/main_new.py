@@ -2,6 +2,19 @@
 main IBVS module
 """
 
+# TODO: Refactor script to import regardless of location
+# =========
+import os
+import sys
+from pathlib import Path
+
+# Add the src directory to Python path for imports
+SRC_DIR = Path(__file__).resolve().parent
+if str(SRC_DIR) not in sys.path:
+    sys.path.append(str(SRC_DIR))
+# ==========
+
+
 import pdb
 
 import sys
@@ -149,7 +162,8 @@ def get_transformation_matrix(
         for j in range(3):
             r_i[i][j] = robot_rotation_matrix[i][j]
     r_i[3][3] = 1
-
+    
+    # simple way to generate SE(3) transformation matrix by multiplying the rotation and translation matrix
     transform = np.matmul(r_i, t_c)
 
     return transform
@@ -207,15 +221,16 @@ def update_pos_and_orn(
     returns the updated position and orientation of the robot
     uses homogenous coordinates
     """
-    # del_pos = np.matmul(transform, [*velocity[:3], 1])
-    # for i in range(3):
-    #     robot_pos[i] += (del_pos[i] / del_pos[-1]) * dt
+    del_pos = np.matmul(transform, [*velocity[:3], 1])
+    for i in range(3):
+        robot_pos[i] += (del_pos[i] / del_pos[-1]) * dt
 
+    # constant forward velocity
     robot_pos[1] += 2.5 * dt
 
-    del_orn = np.matmul(transform, [*velocity[3:], 1])
-    for i in range(3):
-        robot_orn[i] += (del_orn[i] / del_orn[-1]) * dt
+    # del_orn = np.matmul(transform, [*velocity[3:], 1])
+    # for i in range(3):
+    #     robot_orn[i] += (del_orn[i] / del_orn[-1]) * dt
 
     return robot_pos, robot_orn
 
@@ -386,8 +401,9 @@ def main_real():
     Implement main function for interbotix arms
     """
     
-    # Jul 24 - 21:00
-    # initialize target image
+    # Jul 24 - 21:30
+    # initialize target image``
+    
     # intialize robot orientation frame
     # do
     #   get real-life rgb image

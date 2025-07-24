@@ -34,8 +34,7 @@ def get_marker_corners(img_arr: np.ndarray) -> Union[List[List[float]], None]:
     """
     gets the corners of the marker in the given image
     """
-    # TODO: This is shitty implementation.
-    # get_markers() should be modified to return marker_corners[0], marker_ids[0] directly
+
     marker_corners, marker_ids = get_markers(img_arr)
     if not marker_corners:
         return None
@@ -46,7 +45,7 @@ def get_marker_corners(img_arr: np.ndarray) -> Union[List[List[float]], None]:
     )
 
     corners = corners.reshape(4, 2)
-    corners = corners.astype(int)  # ?? why
+    corners = corners.astype(int)  # int vs np.int32 ?
 
     top_left = list(corners[0].ravel())
     top_right = list(corners[1].ravel())

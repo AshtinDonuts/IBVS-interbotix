@@ -29,15 +29,17 @@ def parse_keypoints_data(filename):
     
     return robot_positions, keypoint_counts
 
-def create_plot(robot_positions, keypoint_counts, output_filename='keypoints_vs_position.png'):
+def create_plot(robot_positions, keypoint_counts, output_filename='keypoints_vs_rotation.png'):
     """Create a plot of keypoint counts vs robot Y position."""
     plt.figure(figsize=(12, 8))
 
-    use_offset = True ##
-    # use robot position relative to y-offset
-    if use_offset:
-        robot_positions = 2 - np.array(robot_positions)
-        robot_positions = list(robot_positions)
+    # use_offset = True ##
+    # # use robot position relative to y-offset
+    # if use_offset:
+    #     robot_positions = 2 - np.array(robot_positions)
+    #     robot_positions = list(robot_positions)
+
+    robot_positions = [-np.pi/10 + i*(np.pi/50) for i in range(len(keypoint_counts))]
 
     plt.plot(robot_positions, keypoint_counts, 'bo-', linewidth=2, markersize=6, label='Matching Keypoints')
     
@@ -45,9 +47,9 @@ def create_plot(robot_positions, keypoint_counts, output_filename='keypoints_vs_
     plt.grid(True, alpha=0.3)
     
     # Customize plot
-    plt.xlabel('Robot Y Position', fontsize=14)
+    plt.xlabel('Robot Rot Position', fontsize=14)
     plt.ylabel('Number of Matching Keypoints', fontsize=14)
-    plt.title('Matching Keypoints vs Robot Y Position', fontsize=16, fontweight='bold')
+    plt.title('Matching Keypoints vs Robot Rot Position', fontsize=16, fontweight='bold')
     
     # Add statistics
     max_kpts = max(keypoint_counts)
