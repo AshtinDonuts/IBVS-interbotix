@@ -92,6 +92,7 @@ def get_velocity_K_points(
 
 def get_linear_vel(K_sample_mkpts0: Union[List[List[float]], np.ndarray], K_sample_mkpts1: Union[List[List[float]], np.ndarray],
                     ) -> np.ndarray:
+    
     # Convert inputs to numpy arrays if they aren't already
     mkpts0 = np.array(K_sample_mkpts0.cpu())
     mkpts1 = np.array(K_sample_mkpts1.cpu())
@@ -114,6 +115,11 @@ def get_linear_vel(K_sample_mkpts0: Union[List[List[float]], np.ndarray], K_samp
     vel[2] = -1 * vel[2]
 
     ## arbitrary forward motion
-    vel[1] = 1 * 50
+    vel[1] = 1
 
-    return vel * 2.0    #
+    # Normalize velocity components that are > 1
+    for i in range(len(vel)):
+        if abs(vel[i]) > 1:
+            vel[i] = vel[i] / abs(vel[i])
+
+    return vel    #
