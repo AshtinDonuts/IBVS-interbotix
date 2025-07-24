@@ -72,7 +72,7 @@ def get_velocity_K_points(
                 X=int(K_sample_mkpts0[i][0]),
                 Y=int(K_sample_mkpts0[i][1]),
                 # Z=(depth_buffer[int(K_sample_mkpts0[i][0])][int(K_sample_mkpts0[i][1])]),  # Get depth at x,y # TODO: fix bug
-                Z=(depth_buffer[int(K_sample_mkpts0[i][1])][int(K_sample_mkpts0[i][0])]),  # switched X, Y 
+                Z=(depth_buffer[int(K_sample_mkpts0[i][1])][int(K_sample_mkpts0[i][0])]),  # switched X, Y -> which one is correct?
             )
             for i in range(K) 
         ]
@@ -114,6 +114,6 @@ def get_linear_vel(K_sample_mkpts0: Union[List[List[float]], np.ndarray], K_samp
     vel[2] = -1 * vel[2]
 
     ## arbitrary forward motion
-    vel[1] = 1 * 0.1
+    vel[1] = 1 * 50
 
     return vel * 2.0    #

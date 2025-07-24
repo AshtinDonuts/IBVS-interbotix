@@ -19,14 +19,14 @@ from servo import get_marker_corners
 from motion import get_error_mag, get_error_vec, get_velocity
 
 from servo_new import match_superpoints
-from motion_new import get_error_mag, get_error_vec_K, sample_points, get_velocity_K_points
+from motion_new import get_error_mag, get_error_vec_K, sample_points, get_velocity_K_points, get_linear_vel
 
 import cv2
 
 
-MAX_ITERATIONS = 100
-TARGET_PATH=Path('/home/khw/Documents/6dpose/LightGlue/myassets/frame_000050_crop.png')
-K = 3
+MAX_ITERATIONS = 70
+TARGET_PATH=Path('/home/khw/Documents/6dpose/LightGlue/myassets/frame_000050_crop_padded.png')
+K = 20
 
 
 def init_pybullet() -> int:
@@ -35,7 +35,7 @@ def init_pybullet() -> int:
     """
     pclient = p.connect(p.GUI)  # p.GUI/p.DIRECT 
     p.setAdditionalSearchPath(pybullet_data.getDataPath())
-    p.setGravity(0, 0, -10)
+    p.setGravity(0, 0, 0)  # Turn off gravity
     # p.setRealTimeSimulation(True)
 
     return pclient
@@ -59,20 +59,27 @@ def init_scene(robot_pos: list[float]) -> Tuple[int, List[int]]:
     base = robot_pos  # for now
     base_orn = p.getQuaternionFromEuler([0, 0, 0])
     obstacles = []
+
+    # new offset for testing
+    new_offsetx = 0
+    new_offsetx = 0.75
+    new_offsetz = 0
+    new_offsetz = 0.75
+
     ## builds a wall of cubes
-    for z_offset in [0, 1]: 
-        for y_offset in [4]:  # 7.5
-            for x_offset in [0, -1, 1]:
+    for z_offset in [0, 1]:   # z is up/down
+        for y_offset in [2.5]:  # 7.5    # y is forward-backward
+            for x_offset in [0, -1, 1]:  # x is left-right
                 obstacles.append(
                     p.loadURDF(
                         "cube_small.urdf",
                         [
-                            base[0] + x_offset,
+                            base[0] + x_offset + new_offsetx,
                             base[1] + y_offset,
-                            base[2] + z_offset,
+                            base[2] + z_offset + new_offsetz,
                         ],
                         base_orn,
-                        globalScaling=20,
+                        globalScaling=20,  # Remove or adjust as needed
                     )
                 )
 
@@ -200,9 +207,11 @@ def update_pos_and_orn(
     returns the updated position and orientation of the robot
     uses homogenous coordinates
     """
-    del_pos = np.matmul(transform, [*velocity[:3], 1])
-    for i in range(3):
-        robot_pos[i] += (del_pos[i] / del_pos[-1]) * dt
+    # del_pos = np.matmul(transform, [*velocity[:3], 1])
+    # for i in range(3):
+    #     robot_pos[i] += (del_pos[i] / del_pos[-1]) * dt
+
+    robot_pos[1] += 2.5 * dt
 
     del_orn = np.matmul(transform, [*velocity[3:], 1])
     for i in range(3):
@@ -239,16 +248,16 @@ def update_error(error_mag: float, i: int | None = None) -> None:
         p.disconnect()
         sys.exit(0)
 
-def _simple_forward() -> None:
-    """Move robot forward"""
+def simple_forward() -> None:
+    """Move robot forward OR rotation"""
     _ = init_pybullet()
     img_conf = get_image_config()
     dt: float = 0.05  # 0.0001
 
     # initialise the robot position and orientation (arbitrary)
     robot_pos = [0, 0, 1.0]  # [0, 0, 1]   # only z matters as target offsets from cam
-    # robot_orientation = [0, 0, 0]
-    robot_orientation = [0, 0, 0 - np.pi / 10]
+    robot_orientation = [0, 0, 0]
+    # robot_orientation = [0, 0, 0 - np.pi / 10]
 
     _, _ = init_scene(robot_pos)
     sleep(2)  # scene load buffer
@@ -289,7 +298,8 @@ def _simple_forward() -> None:
         # pdb.set_trace()
 
         speed = 1
-        robot_pos = [robot_pos[0], robot_pos[1] + speed * dt, robot_pos[2]]
+        # robot_pos = [robot_pos[0], robot_pos[1] + speed * dt, robot_pos[2]]
+        robot_orientation[2] += np.pi / 50
 
         sleep(0.01)  # arbitrary sleep to let the changes take place
 
@@ -298,18 +308,17 @@ def _simple_forward() -> None:
         with open('dist_img/src_kpts_count.txt', 'a') as f:
             f.write(f"Iteration {i}: {num_src_kpts} matching keypoints detected, robot position: {robot_pos}\n")
 
-
 def main() -> None:
     """
     the main flow
     """
     _ = init_pybullet()
     img_conf = get_image_config()
-    dt: float = 0.0001
+    dt: float = 0.005
 
     # initialise the robot position and orientation (arbitrary)
-    robot_pos = [0, 0, 1.0]
-    robot_orientation = [0, 0, 0 - np.pi / 2]
+    robot_pos = [0, 0, 1.0]    # [x, y, z]
+    robot_orientation = [0, 0, 0]
 
     _, _ = init_scene(robot_pos)
 
@@ -319,7 +328,7 @@ def main() -> None:
         p.stepSimulation()
         robot_rot_matrix = get_robot_rotation_matrix(robot_orientation)  # what frame?
 
-        ## img : (width, height, rgbImg, depthImg, segImg)
+        ## img : (width, height, rgbaImg, depthImg, segImg)
         img = capture_camera_image(robot_pos, robot_rot_matrix)
 
         rgba = img[2]  # Img[2]: (h x w x 4)
@@ -342,9 +351,8 @@ def main() -> None:
         # if no SuperPoints detected, skip iter and keep rotating
         if src_kpts is None or tgt_kpts is None or len(src_kpts) < K:
             print("no SuperPoints detected, rotating")
-            robot_orientation[2] += np.pi / 18
+            robot_orientation[2] += np.pi / 50
             save_image(None, i, rgb_img_arr, MIN_ERROR)
-
             continue
 
         K_sample_src, K_sample_tgt = sample_points(src_kpts, tgt_kpts, K)
@@ -359,7 +367,9 @@ def main() -> None:
             update_error(error, i=i)
 
         # get the velocity, transform vector, and update position and orientation
-        velocity = get_velocity_K_points(K_sample_src, K_sample_tgt, depth_buffer=img[3])
+        velocity = get_linear_vel(K_sample_src, K_sample_tgt)  ##
+        # velocity = get_velocity_K_points(K_sample_src, K_sample_tgt, depth_buffer=img[3])
+
         transform = get_transformation_matrix(robot_pos, robot_rot_matrix)
 
         robot_pos, robot_orientation = update_pos_and_orn(
@@ -371,6 +381,28 @@ def main() -> None:
     p.disconnect()
     sys.exit(0)
 
+def main_real():
+    """
+    Implement main function for interbotix arms
+    """
+    
+    # Jul 24 - 21:00
+    # initialize target image
+    # intialize robot orientation frame
+    # do
+    #   get real-life rgb image
+    #   resize real-life rgb image
+    #   get the robot rotation
+    #   run Cutie/GAM to extract mask
+    #   run LightGlue to match curr-im vs tgt-im (q: sampling?)
+    #   if not-in-contact:
+    #       move forward by constant velocity
+    #   velocity <- get_linear_vel(src-kpts, tgt-kpts)
+    #   transform <- get_transform-matrix()
+    #   compute newpos, neworn = update-pos-and-orn(transform, velocity, robot-pos, robot-orn, dt)
+    #
+    
+    pass
 
 if __name__ == "__main__":
     main()
