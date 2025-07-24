@@ -117,9 +117,9 @@ def get_linear_vel(K_sample_mkpts0: Union[List[List[float]], np.ndarray], K_samp
     ## arbitrary forward motion
     vel[1] = 1
 
-    # Normalize velocity components that are > 1
-    for i in range(len(vel)):
-        if abs(vel[i]) > 1:
-            vel[i] = vel[i] / abs(vel[i])
+    # Normalize velocity vector to unit length
+    vel_magnitude = np.linalg.norm(vel)
+    if vel_magnitude > 0:
+        vel = vel / vel_magnitude
 
     return vel    #
