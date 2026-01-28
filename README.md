@@ -1,8 +1,17 @@
 # Image Based Visual Servoing
 
-A simple IBVS simulation in `pybullet` built as a learning experiment as a part of my undergraduate research.
+A Pretrained Vision Model (PVM) -enhanced IBVS simulation in `pybullet` built as a learning experiment.
 
 The initial code was built off of @roadrollerdafjorst's [IBVS sim](https://github.com/roadrollerdafjorst/visual-servoing/tree/main/IBVS) but has deviated since.
+
+The original repo uses a simple servo-ing algorithm. Our new repo experiments builds on top by using PVMs such as LightGlue, GAM, etc.
+
+Each script is basically a test script that records empirical results.
+
+---
+
+# Below is the Original Repo
+
 
 ## Instructions
 
