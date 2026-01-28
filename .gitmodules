@@ -1,0 +1,3 @@
+[submodule "lib/LightGlue"]
+	path = lib/LightGlue
+	url = https://github.com/cvg/LightGlue.git

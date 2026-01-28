@@ -16,7 +16,7 @@ from typing import List, Union, Tuple
 import torch
 from pathlib import Path
 
-from servo import *   # methods from original script
+from .servo import *   # methods from original script
 from lightglue import LightGlue, SuperPoint, DISK
 from lightglue.utils import load_image, rbd, resize_image
 from lightglue import viz2d
@@ -32,7 +32,7 @@ SUPERPOINT_CONFIG = {
     'remove_borders': 4
 }
 
-def _configure_superpoint(max_keypoints: int = 30, keypoint_threshold: float = 0.005, 
+def configure_superpoint(max_keypoints: int = 30, keypoint_threshold: float = 0.005, 
                         remove_borders: int = 4) -> None:
     """
     Configure SuperPoint parameters globally
@@ -53,7 +53,7 @@ def _configure_superpoint(max_keypoints: int = 30, keypoint_threshold: float = 0
     if hasattr(get_SuperPoints, '_extractor'):
         delattr(get_SuperPoints, '_extractor')
 
-def _get_SuperPoints(img_arr : np.ndarray) -> Tuple[Union[List , None], List]:
+def get_SuperPoints(img_arr : np.ndarray) -> Tuple[Union[List , None], List]:
     """
     Detects SuperPoints in image and returns ALL Points.
     """
@@ -64,7 +64,7 @@ def _get_SuperPoints(img_arr : np.ndarray) -> Tuple[Union[List , None], List]:
             max_num_keypoints=SUPERPOINT_CONFIG['max_num_keypoints'],
             keypoint_threshold=SUPERPOINT_CONFIG['keypoint_threshold'],
             remove_borders=SUPERPOINT_CONFIG['remove_borders']
-        )
+        ).eval().to(device)  # Set to eval mode and move to device
     
     extractor = get_SuperPoints._extractor
     
@@ -81,20 +81,18 @@ def _get_SuperPoints(img_arr : np.ndarray) -> Tuple[Union[List , None], List]:
     if gray.dtype != np.float32:
         gray = gray.astype(np.float32) / 255.0
     
-    # Convert numpy array to PyTorch tensor
-    gray_tensor = torch.from_numpy(gray).unsqueeze(0)  # Add batch dimension
+    # Convert numpy array to PyTorch tensor with correct shape (1, 1, H, W)
+    gray_tensor = torch.from_numpy(gray).unsqueeze(0).unsqueeze(0)  # Add batch and channel dimensions
     
     # Extract features
     try:
-        feats = extractor.extract(gray_tensor)
+        feats = extractor.extract(gray_tensor.to(device))  # Move tensor to device
         keypoints = feats['keypoints'].cpu().numpy()
     except Exception as e:
         print(f"Error extracting SuperPoint features: {e}")
         return None, []
     
-    # print(f"Debug: keypoints shape: {keypoints.shape if hasattr(keypoints, 'shape') else 'No shape'}")  ## (1, 30, 2)
-    # print(f"Debug: keypoints type: {type(keypoints)}")
-    # print(f"Debug: number of keypoints: {len(keypoints)}")
+    print(f"Debug: Detected {keypoints.shape[1] if len(keypoints.shape) > 1 else 0} keypoints with shape {keypoints.shape}")
     
     # TODO : REFACTOR reshape transformation redundancies.
     # Reshape keypoint to expected format: (1, n, 2) -> (n, 1, 2), n = min(n, 30)

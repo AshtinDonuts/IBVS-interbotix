@@ -11,7 +11,8 @@ def main():
     configure_superpoint(max_keypoints=50, keypoint_threshold=0.01)
     
     # Load an image
-    img = cv2.imread('path_to_your_image.jpg')
+    impath = '/home/khw/IBVS-interbotix/assets/crop1a.png'
+    img = cv2.imread(impath)
     if img is None:
         print("Could not load image")
         return
@@ -19,15 +20,19 @@ def main():
     # Detect SuperPoint features
     marker_corners, marker_ids = get_SuperPoints(img)
     
-    if marker_corners:
-        print(f"Detected {len(marker_corners)} SuperPoint features")
+    if marker_corners is not None:
+        # marker_corners has shape (1, N, 2) where N is the number of keypoints
+        num_keypoints = marker_corners.shape[1]
+        print(f"Detected {num_keypoints} SuperPoint features")
+        
+        # Reshape to (N, 2) for easier iteration
+        keypoints = marker_corners.reshape(-1, 2)
         
         # Visualize keypoints
-        for i, corner in enumerate(marker_corners):
-            kpt = corner.reshape(-1, 2)[0]
+        for i, kpt in enumerate(keypoints):
             cv2.circle(img, (int(kpt[0]), int(kpt[1])), 3, (0, 255, 0), -1)
             cv2.putText(img, str(i), (int(kpt[0])+5, int(kpt[1])-5), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 0, 0), 1)
     
     # Show result
     cv2.imshow('SuperPoint Features', img)
@@ -35,4 +40,4 @@ def main():
     cv2.destroyAllWindows()
 
 if __name__ == "__main__":
-    main() 
+    main()
