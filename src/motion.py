@@ -88,7 +88,7 @@ def get_error_vec(points: List[List[float]]) -> np.ndarray:
     return error
 
 
-def get_error_mag(error: np.ndarray) -> float:
+def get_error_mse(error: np.ndarray) -> float:
     """
     returns the magnitude of error for the given error vector
     """

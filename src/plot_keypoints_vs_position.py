@@ -1,3 +1,21 @@
+"""
+Consumes the text file that counts the source keypoints based on position from the target \
+    and generates a plot
+
+Requires a file with this format:
+
+Number of features in feats0: torch.Size([1, 612, 2])
+Number of features in feats1: torch.Size([1, 293, 2])
+Iteration 0: 1 matching keypoints detected, robot position: [0, 0, 1.0]
+Number of features in feats0: torch.Size([1, 549, 2])
+Number of features in feats1: torch.Size([1, 293, 2])
+Iteration 1: 0 matching keypoints detected, robot position: [0, 0, 1.0]
+...
+
+TODO: Make the code less hacky
+
+"""
+
 import matplotlib.pyplot as plt
 import re
 import numpy as np

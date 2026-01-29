@@ -1,0 +1,30 @@
+# IBVS Configuration File
+
+# Maximum number of iterations for the servoing loop
+max_iterations: 6
+
+# Path to target image
+target_image_path: "/home/khw/Documents/6dpose/dummy_tgt.JPG"
+
+# Time step for control loop (seconds)
+dt: 0.005
+
+# Gain parameter for control
+K: 20
+
+# Constant forward velocity when keypoints fail to match
+constant_forward_vel: 2.5
+
+# Directory to save output files
+save_dir: "/home/khw/Documents/6dpose/TheLanding"
+
+# Directory to save historical RGB images
+historical_rgb_path: "/home/khw/Documents/6dpose/TheLanding/Historical_RGB"
+
+# Maximum number of historical masks to keep in queue
+historical_mask_queue: 5
+
+# Scale factors for robot control velocities
+x_scale: 0.02
+y_scale: 0.02
+z_scale: 0.02

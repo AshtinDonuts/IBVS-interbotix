@@ -1,0 +1,1 @@
+""" YOLO WORLD module using ultralytics. Not a git submodule """

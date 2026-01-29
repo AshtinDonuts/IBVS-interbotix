@@ -1,6 +1,13 @@
 """
-main IBVS module
-conda env : proj2
+IBVS module designed to work with the ALOHA Viper X300s.
+
+Requires:
+* Interbotix module dependencies
+* ROS 2
+
+TODO:
+Replacing HuggingFace GAM with GAM2 as stand-in
+
 """
 # from pdb import set_trace
 
@@ -8,7 +15,7 @@ conda env : proj2
 import shutil
 from typing import List, Tuple
 import cv2
-import config_file as cf
+import yaml
 
 # TODO: Refactor script to import regardless of location
 # =========
@@ -43,6 +50,13 @@ from cutie_wrapper import generate_mask_images as cutie_gen_mask_images
 
 
 # ==========
+
+
+def load_config(config_path='config.yaml'):
+    """Load configuration from YAML file."""
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
+    return config
 
 
 # TODO
@@ -95,14 +109,17 @@ def main():
     Final stage servoing for real world Interbotix deployment for ICRA 25 Project.
     """
     
+    # Load configuration from YAML file
+    config = load_config(Path(__file__).parent / 'config.yaml')
+    
     # load initial config vals
-    dt = cf.dt
-    K = cf.K
+    dt = config['dt']
+    K = config['K']
     # Clear and recreate directories
-    shutil.rmtree(cf.SAVE_DIR, ignore_errors=True)
-    shutil.rmtree(cf.historical_rgb_path, ignore_errors=True)
-    Path(cf.SAVE_DIR).mkdir(parents=True, exist_ok=True)
-    Path(cf.historical_rgb_path).mkdir(parents=True, exist_ok=True)
+    shutil.rmtree(config['save_dir'], ignore_errors=True)
+    shutil.rmtree(config['historical_rgb_path'], ignore_errors=True)
+    Path(config['save_dir']).mkdir(parents=True, exist_ok=True)
+    Path(config['historical_rgb_path']).mkdir(parents=True, exist_ok=True)
     
     # bot.arm.go_to_home_pose()
     T_startpose = get_initial_pose()
@@ -130,21 +147,21 @@ def main():
 
 
     # load target image after verifying camera stream success
-    target_img = Image.open(cf.TARGET_IMPATH)
+    target_img = Image.open(config['target_image_path'])
     if target_img is None:
         raise FileNotFoundError("## Could not load target image. Check if file exists. ##")
     target_mask = GAM(target_img)
     seg_target_rgb_np = crop_masked_region(target_img, target_mask)
     seg_target_rgb = Image.fromarray(seg_target_rgb_np)
     # Save target mask and segmented target RGB
-    target_mask.save(Path(cf.SAVE_DIR) / "target_mask.png")
-    seg_target_rgb.save(Path(cf.SAVE_DIR) / "target_seg.png")
+    target_mask.save(Path(config['save_dir']) / "target_mask.png")
+    seg_target_rgb.save(Path(config['save_dir']) / "target_seg.png")
     
     itr = 0
 
     try:
 
-        while test_bound(bot.arm.get_ee_pose()) and itr < cf.MAX_ITERATIONS:
+        while test_bound(bot.arm.get_ee_pose()) and itr < config['max_iterations']:
 
             itr += 1
 
@@ -162,8 +179,8 @@ def main():
                 color_image = Image.fromarray(color_image)
 
                 # Save current RGB frame (already a PIL image)
-                color_image.save(Path(cf.SAVE_DIR) / f"frame_{itr}.png")
-                color_image.save(Path(cf.historical_rgb_path) / f"frame_{itr}.png")
+                color_image.save(Path(config['save_dir']) / f"frame_{itr}.png")
+                color_image.save(Path(config['historical_rgb_path']) / f"frame_{itr}.png")
 
                 # if we don't have previous mask frame, use GAM. Else use Cutie
                 if not curr_mask:
@@ -171,17 +188,17 @@ def main():
                     curr_mask = GAM(color_image)
                 else:
                     print('##  Mask exists. Using Cutie.  ##')
-                    cutie_masks = Cutie(image_path=cf.historical_rgb_path,
-                                         mask_path=str(Path(cf.SAVE_DIR) / f"mask_1.png"))  ## TODO: 1. Modify to maintain Cutie instance once initialized, 2. elimiante redundant file saving/loading
+                    cutie_masks = Cutie(image_path=config['historical_rgb_path'],
+                                         mask_path=str(Path(config['save_dir']) / f"mask_1.png"))  ## TODO: 1. Modify to maintain Cutie instance once initialized, 2. elimiante redundant file saving/loading
                     assert isinstance(cutie_masks, List)
                     curr_mask = cutie_masks[-1]
                     assert isinstance(curr_mask, Image.Image)
                 # Reduce queue size
-                # if len(historical_masks) > cf.HISTORICAL_MASK_QUEUE:
-                #     historical_masks = historical_masks[-cf.HISTORICAL_MASK_QUEUE:]
+                # if len(historical_masks) > config['historical_mask_queue']:
+                #     historical_masks = historical_masks[-config['historical_mask_queue']:]
 
                 # Save mask (already a PIL image)
-                curr_mask.save(Path(cf.SAVE_DIR) / f"mask_{itr}.png")
+                curr_mask.save(Path(config['save_dir']) / f"mask_{itr}.png")
 
                 ## Overlay mask with RGB
                 seg_src_rgb_np = crop_masked_region(color_image, curr_mask, 2)
@@ -189,7 +206,7 @@ def main():
                 seg_src_rgb = Image.fromarray(seg_src_rgb_np)
 
                 # Save segmented RGB (already a PIL image)
-                seg_src_rgb.save(Path(cf.SAVE_DIR) / f"seg_{itr}.png")
+                seg_src_rgb.save(Path(config['save_dir']) / f"seg_{itr}.png")
 
                 # set_trace()
 
@@ -197,15 +214,15 @@ def main():
                 try:
                     m_src_kpts, m_tgt_kpts = match_superpoints(
                         # seg_src_rgb_np, seg_target_rgb_np
-                        Path(cf.SAVE_DIR) / f"seg_{itr}.png",
-                        Path(cf.SAVE_DIR) / "target_seg.png"
+                        Path(config['save_dir']) / f"seg_{itr}.png",
+                        Path(config['save_dir']) / "target_seg.png"
                     )
                     assert len(m_src_kpts) > 0, "Number of keypoints is 0"
                     assert len(m_src_kpts) == len(m_tgt_kpts), " Matched keypoint lengths not equal between target / source "
                 except Exception as e:
                     print(f" ## Error matching keypoints: {e}")
                     velocity = np.zeros(6)
-                    velocity[1] = cf.CONSTANT_FORWARD_VEL # Move forward with constant velocity
+                    velocity[1] = config['constant_forward_vel'] # Move forward with constant velocity
                     continue
 
                 # print('length of number of source kpts :', len(m_src_kpts))
@@ -222,9 +239,9 @@ def main():
 
                     dely = -1 * dely
 
-                    delx *= cf.x_scale
-                    dely *= cf.y_scale 
-                    delz *= cf.z_scale
+                    delx *= config['x_scale']
+                    dely *= config['y_scale'] 
+                    delz *= config['z_scale']
 
                     print(f"Moving robot with velocities:")
                     print(f"  x: {delx:6.3f}")
@@ -249,7 +266,7 @@ def main():
         # Save final image before stopping
         color_frame = get_valid_color_frame(pipeline)
         color_image = np.asanyarray(color_frame.get_data())
-        cv2.imwrite(str(Path(cf.SAVE_DIR) / "final_image.png"), cv2.cvtColor(color_image, cv2.COLOR_RGB2BGR))
+        cv2.imwrite(str(Path(config['save_dir']) / "final_image.png"), cv2.cvtColor(color_image, cv2.COLOR_RGB2BGR))
     
     finally:
         pipeline.stop()
