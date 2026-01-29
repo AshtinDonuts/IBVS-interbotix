@@ -1,3 +1,6 @@
 [submodule "lib/LightGlue"]
 	path = lib/LightGlue
 	url = https://github.com/cvg/LightGlue.git
+[submodule "lib/Grounded-SAM-2"]
+	path = lib/Grounded-SAM-2
+	url = https://github.com/IDEA-Research/Grounded-SAM-2.git
