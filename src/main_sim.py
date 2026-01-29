@@ -21,6 +21,7 @@ import numpy as np
 from pathlib import Path
 import yaml
 import cv2
+import csv
 
 from image import convert_img_to_arr, save_image, get_image_config
 from superpoint_utils import match_superpoints
@@ -29,8 +30,10 @@ from motion import LAMBDA
 
 
 #  Simple config
-MAX_ITERATIONS = 70
-TARGET_PATH = Path('/home/khw/IBVS-interbotix/assets/cat.png')
+MAX_ITERATIONS = 200
+# TARGET_PATH = Path('/home/khw/IBVS-interbotix/assets/cat.png')
+TARGET_PATH = Path('/home/khw/IBVS-interbotix/assets/resized_cat.png')
+# TARGET_PATH = Path('/home/khw/IBVS-interbotix/assets/aruco.png')
 K = 20
 
 #  Error exit condition config
@@ -135,6 +138,143 @@ class SceneManager:
             raise RuntimeError("Goal object has not been created yet.")
         pos, _ = p.getBasePositionAndOrientation(self.goal_id)
         return np.array(pos)
+
+
+class DataLogger:
+    """
+    Logger for recording simulation metrics at each timestep.
+    """
+    
+    def __init__(self, log_dir: Path, experiment_name: str = None):
+        """
+        Initialize the data logger.
+        
+        Parameters
+        ----------
+        log_dir : Path
+            Directory where log files will be saved.
+        experiment_name : str, optional
+            Name for this experiment run. If None, uses default name.
+        """
+        self.log_dir = Path(log_dir)
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Generate experiment name
+        if experiment_name is None:
+            experiment_name = "experiment"
+        
+        # Find next available file number
+        existing_files = list(self.log_dir.glob(f"{experiment_name}_*.csv"))
+        if existing_files:
+            # Extract numbers from existing files
+            numbers = []
+            for f in existing_files:
+                try:
+                    num = int(f.stem.split('_')[-1])
+                    numbers.append(num)
+                except ValueError:
+                    continue
+            next_num = max(numbers) + 1 if numbers else 1
+        else:
+            next_num = 1
+        
+        # Create CSV file
+        self.log_file = self.log_dir / f"{experiment_name}_{next_num:03d}.csv"
+        self.csv_file = open(self.log_file, 'w', newline='')
+        self.csv_writer = csv.writer(self.csv_file)
+        
+        # Write header
+        self.csv_writer.writerow([
+            'iteration',
+            'error_magnitude',
+            'distance_to_target',
+            'oracle_orientation_diff',
+            'num_matched_keypoints',
+            'robot_pos_x',
+            'robot_pos_y',
+            'robot_pos_z',
+            'robot_orn_x',
+            'robot_orn_y',
+            'robot_orn_z',
+            'target_pos_x',
+            'target_pos_y',
+            'target_pos_z',
+            'image_path'
+        ])
+        self.csv_file.flush()
+        
+        print(f"Data logger initialized. Log file: {self.log_file}")
+    
+    def log_iteration(
+        self,
+        iteration: int,
+        error_magnitude: float,
+        robot_pos: List[float],
+        robot_orn: List[float],
+        target_pos: np.ndarray,
+        num_matched_keypoints: int,
+        image_path: str
+    ):
+        """
+        Log data for a single iteration.
+        
+        Parameters
+        ----------
+        iteration : int
+            Current iteration number.
+        error_magnitude : float
+            MSE error magnitude.
+        robot_pos : List[float]
+            Current robot position [x, y, z].
+        robot_orn : List[float]
+            Current robot orientation [roll, pitch, yaw].
+        target_pos : np.ndarray
+            Target position [x, y, z].
+        num_matched_keypoints : int
+            Number of matched keypoints between live and target.
+        image_path : str
+            Path to the saved image for this iteration.
+        """
+        # Calculate distance to target
+        distance_to_target = np.linalg.norm(np.array(target_pos) - np.array(robot_pos))
+        
+        # Calculate oracle orientation difference
+        orientation_diff = np.linalg.norm(robot_orn)  # Magnitude of orientation angles
+        
+        # Write row
+        self.csv_writer.writerow([
+            iteration,
+            f"{error_magnitude:.6f}",
+            f"{distance_to_target:.6f}",
+            f"{orientation_diff:.6f}",
+            num_matched_keypoints,
+            f"{robot_pos[0]:.6f}",
+            f"{robot_pos[1]:.6f}",
+            f"{robot_pos[2]:.6f}",
+            f"{robot_orn[0]:.6f}",
+            f"{robot_orn[1]:.6f}",
+            f"{robot_orn[2]:.6f}",
+            f"{target_pos[0]:.6f}",
+            f"{target_pos[1]:.6f}",
+            f"{target_pos[2]:.6f}",
+            image_path
+        ])
+        self.csv_file.flush()
+    
+    def close(self):
+        """Close the log file."""
+        if self.csv_file and not self.csv_file.closed:
+            self.csv_file.close()
+            print(f"Data log saved to: {self.log_file}")
+    
+    def __enter__(self):
+        """Context manager entry."""
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit."""
+        self.close()
+
 
 def load_config(config_path='config.yaml'):
     """Load configuration from YAML file."""
@@ -313,7 +453,8 @@ def update_pos_and_orn(
 
 def update_error(error_mag: float, iteration: int | None = None) -> None:
     """
-    updates the global min error and determines when to break
+    updates the global min error
+    removed the break
     """
 
     global MIN_ERROR
@@ -328,12 +469,9 @@ def update_error(error_mag: float, iteration: int | None = None) -> None:
             print(f"increase from min: {error_mag - MIN_ERROR}")
         else:
             print(f"error remained same: {error_mag}")
+    
 
-    if error_mag > (1 + ERROR_GROWTH_LIMIT) * MIN_ERROR:
-        # indicator of some divergence
-        print("DONE: error growth limit reached")
-        p.disconnect()
-        sys.exit(0)
+## ============ Driving code ============== ##
 
 def OLD_simple_forward() -> None:
     """Move robot forward OR rotation"""
@@ -408,7 +546,7 @@ def main() -> None:
     # initialise the robot position and orientation (arbitrary)
     robot_pos = [0, 0, 1.0]    # [x, y, z]
     robot_orientation = [0.25, 0.25, 0.25]
-    robot_orientation = [0.3, 0.0, 0.0]
+    robot_orientation = [0.2, 0.1, 0.0]
 
     # set up scene
     _, _ = init_scene(robot_pos)
@@ -424,9 +562,13 @@ def main() -> None:
     import os
     os.makedirs('/home/khw/IBVS-interbotix/src/dist_img', exist_ok=True)
 
+    # Initialize data logger
+    log_dir = Path(__file__).parent / 'logs'
+    data_logger = DataLogger(log_dir, experiment_name='ibvs_sim')
+
     sleep(1)  # arbitrary sleep to let the scene load
     
-    for i in range(MAX_ITERATIONS):
+    for i in range(100):
 
         p.stepSimulation()
         robot_rot_matrix = get_robot_rotation_matrix(robot_orientation)  # what frame?
@@ -463,6 +605,17 @@ def main() -> None:
         # Save image with error printed
         save_image(mse_error, i, rgb_img_arr, MIN_ERROR)
 
+        # Log iteration data
+        data_logger.log_iteration(
+            iteration=i,
+            error_magnitude=mse_error,
+            robot_pos=robot_pos,
+            robot_orn=robot_orientation,
+            target_pos=target_pos,
+            num_matched_keypoints=len(src_kpts),
+            image_path=save_impath
+        )
+
         # UNcomment code for early exit conditioned on MSE divergence
         # update_error(mse_error, iteration=i)
 
@@ -477,8 +630,6 @@ def main() -> None:
         vel = motion_utils.update_angular_velocity(vel, K_sample_src, K_sample_tgt, lambda_gain=LAMBDA)
         print(vel[3:6])
 
-        pass ; import pdb; pdb.set_trace()
-
         # Scale each velocity dimension for easier use
         scaled_velocity = motion_utils.scale_velocity(vel, config)
         transform = convert_to_transformation_matrix(robot_pos, robot_rot_matrix)
@@ -488,6 +639,9 @@ def main() -> None:
 
         sleep(0.01)  # sleep to let the changes take place
 
+    # Close data logger
+    data_logger.close()
+    
     p.disconnect()
     sys.exit(0)
 
