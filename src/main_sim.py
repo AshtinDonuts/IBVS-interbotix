@@ -14,7 +14,7 @@ if str(SRC_DIR) not in sys.path:
 
 import sys
 from time import sleep
-from typing import Tuple, List
+from typing import Tuple, List, Dict
 import pybullet as p
 import pybullet_data
 import numpy as np
@@ -36,6 +36,104 @@ K = 20
 MIN_ERROR = float("inf")
 ERROR_GROWTH_LIMIT = 0.90
 
+# Global scene manager instance for accessing object locations
+SCENE_MANAGER = None
+
+
+class SceneManager:
+    """
+    Helper class to manage the simulation scene and query object locations.
+    """
+
+    def __init__(self, robot_pos: list[float]) -> None:
+        self.robot_pos = robot_pos
+        self.plane_id: int | None = None
+        self.obstacles: List[int] = []
+        # Mapping from logical object name to pybullet body unique ID
+        self.objects: Dict[str, int] = {}
+        self.goal_id: int | None = None
+
+    def build_default_scene(self) -> Tuple[int, List[int]]:
+        """
+        Build the default scene: plane + wall of cubes with a goal cube.
+
+        Returns
+        -------
+        plane_id : int
+            The pybullet id of the plane.
+        obstacles : list[int]
+            List of pybullet ids for all obstacle cubes (first is the goal).
+        """
+        plane_id = p.loadURDF("plane.urdf")
+        self.plane_id = plane_id
+
+        # loading obstacles, with the main cube at the first index
+        base = self.robot_pos  # for now
+        base_orn = p.getQuaternionFromEuler([0, 0, 0])
+
+        # new offset for testing
+        new_offsetx = 0.75
+        new_offsetz = 0.75
+
+        # builds a wall of cubes
+        for z_offset in [0, 1]:   # z is up/down
+            for y_offset in [2.5]:  # y is forward-backward
+                for x_offset in [0, -1, 1]:  # x is left-right
+                    body_id = p.loadURDF(
+                        "cube_small.urdf",
+                        [
+                            base[0] + x_offset + new_offsetx,
+                            base[1] + y_offset,
+                            base[2] + z_offset + new_offsetz,
+                        ],
+                        base_orn,
+                        globalScaling=20,  # Remove or adjust as needed
+                    )
+                    self.obstacles.append(body_id)
+
+                    # give each obstacle a deterministic name based on its offsets
+                    name = f"cube_x{x_offset}_y{y_offset}_z{z_offset}"
+                    self.objects[name] = body_id
+
+        # texture the first cube (set as goal)
+        if self.obstacles:
+            goal_obs_id = self.obstacles[0]
+            self.goal_id = goal_obs_id
+            set_aruco_marker_texture(goal_obs_id)
+            self.objects["goal"] = goal_obs_id
+
+        return plane_id, self.obstacles
+
+    def get_object_position(self, name: str) -> np.ndarray:
+        """
+        Get the world position of an object by its logical name.
+
+        Parameters
+        ----------
+        name : str
+            Logical name used when creating the object (e.g. "goal",
+            "cube_x0_y2.5_z0").
+
+        Returns
+        -------
+        np.ndarray
+            3D position (x, y, z) in world coordinates.
+        """
+        if name not in self.objects:
+            raise KeyError(f"Object '{name}' not found in scene.")
+
+        body_id = self.objects[name]
+        pos, _ = p.getBasePositionAndOrientation(body_id)
+        return np.array(pos)
+
+    def get_goal_position(self) -> np.ndarray:
+        """
+        Convenience method to get the goal cube position.
+        """
+        if self.goal_id is None:
+            raise RuntimeError("Goal object has not been created yet.")
+        pos, _ = p.getBasePositionAndOrientation(self.goal_id)
+        return np.array(pos)
 
 def load_config(config_path='config.yaml'):
     """Load configuration from YAML file."""
@@ -63,45 +161,23 @@ def set_aruco_marker_texture(obstacle_id: int) -> None:
     p.changeVisualShape(obstacle_id, -1, textureUniqueId=texture_id)
 
 
-# TODO: change scene target block offset values
 def init_scene(robot_pos: list[float]) -> Tuple[int, List[int]]:
     """
-    initialises the scene and returns created objects
+    Initialise the scene and return created objects.
+
+    This function now uses a global `SceneManager` instance so that
+    object locations can be queried later in the program.
+
+    Returns
+    -------
+    plane_id : int
+        The pybullet id of the plane.
+    obstacles : list[int]
+        List of pybullet ids for all obstacle cubes (first is the goal).
     """
-
-    plane_id = p.loadURDF("plane.urdf")
-    # loading obstacles, with the main cube at the first index
-    base = robot_pos  # for now
-    base_orn = p.getQuaternionFromEuler([0, 0, 0])
-    obstacles = []
-
-    # new offset for testing
-    new_offsetx = 0
-    new_offsetx = 0.75
-    new_offsetz = 0
-    new_offsetz = 0.75
-
-    ## builds a wall of cubes
-    for z_offset in [0, 1]:   # z is up/down
-        for y_offset in [2.5]:  # 7.5    # y is forward-backward
-            for x_offset in [0, -1, 1]:  # x is left-right
-                obstacles.append(
-                    p.loadURDF(
-                        "cube_small.urdf",
-                        [
-                            base[0] + x_offset + new_offsetx,
-                            base[1] + y_offset,
-                            base[2] + z_offset + new_offsetz,
-                        ],
-                        base_orn,
-                        globalScaling=20,  # Remove or adjust as needed
-                    )
-                )
-
-    # texture the first cube (set as goal)
-    goal_obs_id = obstacles[0]
-    set_aruco_marker_texture(goal_obs_id)
-
+    global SCENE_MANAGER
+    SCENE_MANAGER = SceneManager(robot_pos)
+    plane_id, obstacles = SCENE_MANAGER.build_default_scene()
     return plane_id, obstacles
 
 
