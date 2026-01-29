@@ -148,8 +148,8 @@ def match_superpoints(im0: Union[Path, np.ndarray], im1: Union[Path, np.ndarray]
     feats0 = extractor.extract(image0.to(device))
     feats1 = extractor.extract(image1.to(device))
 
-    print(f"Number of features in feats0: {feats0['keypoints'].shape}")
-    print(f"Number of features in feats1: {feats1['keypoints'].shape}")
+    # print(f"Number of features in feats0: {feats0['keypoints'].shape}")
+    # print(f"Number of features in feats1: {feats1['keypoints'].shape}")
 
     matches01 = matcher({"image0": feats0, "image1": feats1})
     feats0, feats1, matches01 = [
