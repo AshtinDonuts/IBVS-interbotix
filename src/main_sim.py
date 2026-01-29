@@ -1,5 +1,8 @@
 """
-PVM-enhanced IBVS implementation
+PVM-enhanced IBVS implementation.
+
+This uses LightGlue for general feature matching.
+
 """
 
 import os
@@ -27,6 +30,7 @@ from image import convert_img_to_arr, save_image, get_image_config
 from superpoint_utils import match_superpoints
 import motion_utils
 from motion import LAMBDA
+from gsam2_terminator import TerminationHandler
 
 
 #  Simple config
@@ -188,7 +192,7 @@ class DataLogger:
             'iteration',
             'error_magnitude',
             'distance_to_target',
-            'oracle_orientation_diff',  # norm of orientation diff against [0,0,0], which is the correct target pose.
+            'oracle_orientation_diff',  # norm of orientation diff against [0, 0, 0], which is the correct target pose.
             'num_matched_keypoints',
             'robot_pos_x',
             'robot_pos_y',
@@ -473,65 +477,6 @@ def update_error(error_mag: float, iteration: int | None = None) -> None:
 
 ## ============ Driving code ============== ##
 
-def OLD_simple_forward() -> None:
-    """Move robot forward OR rotation"""
-    _ = init_pybullet()
-    img_conf = get_image_config()
-    dt: float = 0.05  # 0.0001
-
-    # initialise the robot position and orientation (arbitrary)
-    robot_pos = [0, 0, 1.0]  # [0, 0, 1]   # only z matters as target offsets from cam
-    robot_orientation = [0, 0, 0]
-    # robot_orientation = [0, 0, 0 - np.pi / 10]
-
-    _, _ = init_scene(robot_pos)
-    sleep(2)  # scene load buffer
-
-    # wipe all files in dist_img directory
-    import os, shutil
-    if os.path.exists('dist_img'):
-        shutil.rmtree('dist_img')
-    os.makedirs('dist_img')
-
-    for i in range(30):
-        p.stepSimulation()
-        robot_rot_matrix = get_robot_rotation_matrix(robot_orientation)  # what frame?
-
-        ## img : (width, height, rgbImg, depthImg, segImg)
-        img = capture_camera_image(robot_pos, robot_rot_matrix)
-
-        rgba = img[2]  # Img[2]: (H x W x 4)
-        rgba_arr = convert_img_to_arr(
-            rgba, int(img_conf["height"]), int(img_conf["width"])  # Img[2]: (H x W x 4)
-        )
-        rgb_img_arr = rgba_arr[:, :, :3]  # remove alpha channel (..,4) -> (..,3)
-
-        # TODO : Directly extract image from pybullet
-        save_impath = f'dist_img/distance_image_{i}.png'
-        cv2.imwrite(save_impath, cv2.cvtColor(rgb_img_arr, cv2.COLOR_RGB2BGR))
-
-        # TODO: Remove redundant reshape
-        # remove batch dim [1, 500, 800, 3] -> [500, 800, 3]
-        # rgb_img_arr = np.squeeze(rgb_img_arr, axis=0)
-        
-        assert rgb_img_arr.ndim == 3 and rgb_img_arr.shape[2] == 3, \
-            f"Expected 3D RGB image, got shape {rgb_img_arr.shape}"
-
-        src_kpts, tgt_kpts = match_superpoints(
-            save_impath, TARGET_PATH
-        )
-        assert len(src_kpts) == len(tgt_kpts), "bug in match-superpoints()"
-        # pdb.set_trace()
-
-        robot_orientation[2] += np.pi / 50
-
-        sleep(0.01)  # arbitrary sleep to let the changes take place
-
-        # log the number of source keypoints detected
-        num_src_kpts = len(src_kpts) if src_kpts is not None else 0
-        with open('dist_img/src_kpts_count.txt', 'a') as f:
-            f.write(f"Iteration {i}: {num_src_kpts} matching keypoints detected, robot position: {robot_pos}\n")
-
 def main() -> None:
     """
     the main flow
@@ -566,6 +511,16 @@ def main() -> None:
     log_dir = Path(__file__).parent / 'logs'
     data_logger = DataLogger(log_dir, experiment_name='ibvs_sim')
 
+    # Initialize termination handler (using Grounded SAM2)
+    termination_handler = TerminationHandler(
+        target_image_path=str(TARGET_PATH),
+        text_prompt="cube.",  # Adjust based on your target object
+        similarity_threshold=0.15,  # 15% difference threshold
+        box_threshold=0.35,
+        text_threshold=0.25,
+        enabled=True  # Set to False to disable segmentation termination
+    )
+
     sleep(1)  # arbitrary sleep to let the scene load
     
     for i in range(100):
@@ -591,9 +546,8 @@ def main() -> None:
         assert len(src_kpts) > 0, "No Superpoints detected. It is recommended to reconfigure the experiment space."
         assert len(src_kpts) == len(tgt_kpts), "Error from match_superpoints()"
 
-        # print(f"number of SuperPoints detected: {len(src_kpts)} vs {len(tgt_kpts)}")
-
         # Only use a subset of SuperPoints
+        # TODO: change to allow accessing SuperPoints configuration directly
         try:
             K_sample_src, K_sample_tgt = motion_utils.sample_points(src_kpts, tgt_kpts, K)
         except:
@@ -638,6 +592,11 @@ def main() -> None:
         )
 
         sleep(0.01)  # sleep to let the changes take place
+
+        # Check termination condition using segmentation mask similarity
+        if termination_handler.check_termination(save_impath, iteration=i):
+            break
+
 
     # Close data logger
     data_logger.close()
