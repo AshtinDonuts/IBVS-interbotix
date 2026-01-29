@@ -514,7 +514,7 @@ def main() -> None:
     # Initialize termination handler (using Grounded SAM2)
     termination_handler = TerminationHandler(
         target_image_path=str(TARGET_PATH),
-        text_prompt="cube.",  # Adjust based on your target object
+        text_prompt="cat.",
         similarity_threshold=0.15,  # 15% difference threshold
         box_threshold=0.35,
         text_threshold=0.25,
@@ -523,7 +523,7 @@ def main() -> None:
 
     sleep(1)  # arbitrary sleep to let the scene load
     
-    for i in range(100):
+    for i in range(40):
 
         p.stepSimulation()
         robot_rot_matrix = get_robot_rotation_matrix(robot_orientation) 
@@ -593,9 +593,17 @@ def main() -> None:
 
         sleep(0.01)  # sleep to let the changes take place
 
-        # Check termination condition using segmentation mask similarity
-        if termination_handler.check_termination(save_impath, iteration=i):
-            break
+        # Early termination
+        # We perform 2-fold termination checking
+        # We only perform similarity checking when sufficiently close to the target.
+        distance_to_goal = np.linalg.norm(robot_pos - target_pos)
+        DIST_THRESHOLD = 0.3
+        if distance_to_goal < DIST_THRESHOLD:
+            print(f"Distance to goal ({distance_to_goal:.3f}) < threshold ({DIST_THRESHOLD}). \
+                    Now checking against PVM-based similarity")
+            # Check termination condition using segmentation mask similarity
+            if termination_handler.check_termination(save_impath, iteration=i):
+                break
 
 
     # Close data logger
