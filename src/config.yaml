@@ -16,6 +16,7 @@ K: 20
 constant_forward_vel: 2.5
 
 # Directory to save output files
+# TOOD:
 save_dir: "/home/khw/Documents/6dpose/TheLanding"
 
 # Directory to save historical RGB images
@@ -24,7 +25,12 @@ historical_rgb_path: "/home/khw/Documents/6dpose/TheLanding/Historical_RGB"
 # Maximum number of historical masks to keep in queue
 historical_mask_queue: 5
 
-# Scale factors for robot control velocities
-x_scale: 0.02
-y_scale: 0.02
-z_scale: 0.02
+# Scale factors for robot control velocities (translational)
+x_scale: 10.0
+y_scale: 10.0
+z_scale: 10.0
+
+# Scale factors for robot control velocities (rotational)
+rx_scale: 10.0
+ry_scale: 10.0
+rz_scale: 10.0

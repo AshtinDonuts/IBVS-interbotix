@@ -188,7 +188,7 @@ class DataLogger:
             'iteration',
             'error_magnitude',
             'distance_to_target',
-            'oracle_orientation_diff',
+            'oracle_orientation_diff',  # norm of orientation diff against [0,0,0], which is the correct target pose.
             'num_matched_keypoints',
             'robot_pos_x',
             'robot_pos_y',
@@ -571,7 +571,7 @@ def main() -> None:
     for i in range(100):
 
         p.stepSimulation()
-        robot_rot_matrix = get_robot_rotation_matrix(robot_orientation)  # what frame?
+        robot_rot_matrix = get_robot_rotation_matrix(robot_orientation) 
 
         img = capture_camera_image(robot_pos, robot_rot_matrix)   # (width, height, rgbaImg, depthImg, segImg)
 

@@ -4,14 +4,14 @@ Example usage of SuperPoint integration with visual servoing
 
 import cv2
 import numpy as np
-from src.servo_new import get_SuperPoints, configure_superpoint, match_superpoints
+from src.superpoint_utils import get_SuperPoints, configure_superpoint, match_superpoints
 
 def main():
     # Configure SuperPoint parameters
     configure_superpoint(max_keypoints=50, keypoint_threshold=0.01)
     
     # Load an image
-    impath = '/home/khw/IBVS-interbotix/assets/crop1a.png'
+    impath = '/home/khw/IBVS-interbotix/assets/aruco.jpg'
     img = cv2.imread(impath)
     if img is None:
         print("Could not load image")

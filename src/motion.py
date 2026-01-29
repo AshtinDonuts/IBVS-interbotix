@@ -1,4 +1,5 @@
 """
+This is part of the original repo.
 Functions to determine robot velocity based on current image 
 """
 

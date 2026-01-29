@@ -1,3 +1,7 @@
 src/vid
 src/img
 src/static
+src/dist_img
+
+img/
+src/__pycache__/
