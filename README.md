@@ -4,12 +4,14 @@ A Pretrained Vision Model (PVM) -enhanced IBVS simulation in `pybullet` built as
 
 The initial code was built off of @roadrollerdafjorst's [IBVS sim](https://github.com/roadrollerdafjorst/visual-servoing/tree/main/IBVS) but has deviated since.
 
-The original repo uses a simple servo-ing algorithm. Our new repo experiments builds on top by using PVMs such as:
+The original repo uses a simple servo-ing algorithm that does not converge nicely to the target.
+
+I built a new controller that decouples the rotational and translational controllers.
+
+Our new repo experiments builds on top by using PVMs such as:
 * LightGlue
 * SAM
 * GroundedSAM
-
-It also supports a custom servoing controller. I could not get the one from the original repo to work, so you could try mine instead.
 
 Each script is basically a test script that records empirical results.
 

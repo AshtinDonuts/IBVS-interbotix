@@ -3,4 +3,4 @@
 	url = https://github.com/cvg/LightGlue.git
 [submodule "lib/Grounded-SAM-2"]
 	path = lib/Grounded-SAM-2
-	url = https://github.com/IDEA-Research/Grounded-SAM-2.git
+	url = https://github.com/AshtinDonuts/Donuts-Grounded-SAM-2

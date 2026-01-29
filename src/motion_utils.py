@@ -125,7 +125,7 @@ def update_perpendicular_velocity(vel: np.ndarray, K_sample_mkpts0: Union[List[L
 
 def update_forward_velocity(vel: np.ndarray, config, curr_robot_pos = None, goal_pos = None, d0 = None, i=None, dt=None):
     """
-    A forward velocity controller that increases / decreases speed based on the distance to the object.
+    A forward velocity controller that increases / decreases speed as a function of distance to the object.
     
     Two options:
     * Use the current displacement between the robot position and the goal position

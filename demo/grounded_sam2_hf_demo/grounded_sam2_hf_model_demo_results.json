@@ -1,0 +1,25 @@
+{
+    "image_path": "/home/khw/IBVS-interbotix/src/dist_img/dist_img_0.png",
+    "annotations": [
+        {
+            "class_name": "cat",
+            "bbox": [
+                366.0194091796875,
+                157.8522491455078,
+                439.26617431640625,
+                230.33543395996094
+            ],
+            "segmentation": {
+                "size": [
+                    480,
+                    640
+                ],
+                "counts": "RV\\57h>5K:G3`B_O[<c0UCMj<U1O1000O1O100O1O01O001N101O1O00001O00000000000O001O1O001O1O10000001lMcCc1X=E2N1O001O0O2O0N3G9L4N1O2O100O1O1O100O100O1O010O001O001O001O001N2N^Pn2"
+            },
+            "score": 0.9765625
+        }
+    ],
+    "box_format": "xyxy",
+    "img_width": 640,
+    "img_height": 480
+}

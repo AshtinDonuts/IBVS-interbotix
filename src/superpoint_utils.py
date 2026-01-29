@@ -144,6 +144,8 @@ def match_superpoints(im0: Union[Path, np.ndarray], im1: Union[Path, np.ndarray]
     # Load images
     image0, image1 = load_im(im0, (480, 640)), load_im(im1, (480, 640))
 
+    ## Optionally use GAM here
+
     # TODO: Potential bug : feats0 length mismatch vs when run in ipynb
     feats0 = extractor.extract(image0.to(device))
     feats1 = extractor.extract(image1.to(device))

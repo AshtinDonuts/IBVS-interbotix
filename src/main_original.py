@@ -1,9 +1,7 @@
 """
 This is the original IBVS script from the original Repo.
 
-This one does NOT use any PVM enhancements.
-
-Controller : This script uses the Chaumette implementation, but it might be incorrectly implemented.
+Controller : This script should be using the Chaumette's Visual Servoing implementation, but it might be incorrectly implemented.
 
 """
 
