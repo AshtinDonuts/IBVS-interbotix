@@ -140,8 +140,16 @@ def update_forward_velocity(vel: np.ndarray, config, curr_robot_pos = None, goal
         # print("Currently : curr_robot_pos = {curr_robot_pos}, goal_pos = {goal_pos}")
         assert curr_robot_pos is not None and goal_pos is not None, f"If not using d0 formula, then you must pass current robot position and the goal position"
         _displacement = goal_pos - curr_robot_pos
+
         _distance_to_goal = np.linalg.norm(_displacement)
+
+        custom_dist_bool = True
+        if custom_dist_bool:
+            _distance_to_goal -= 0.5  # stop before the image
+
         _forward_velocity = _gain * _distance_to_goal
+
+        print(f"Forward velocity: {_forward_velocity:.4f}, Distance to goal: {_distance_to_goal:.4f}")
 
     else:
         #   WARNING : Implemented but not tested.
