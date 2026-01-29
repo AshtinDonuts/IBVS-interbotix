@@ -25,6 +25,7 @@ import cv2
 from image import convert_img_to_arr, save_image, get_image_config
 from superpoint_utils import match_superpoints
 import motion_utils
+from motion import LAMBDA
 
 
 #  Simple config
@@ -76,7 +77,7 @@ class SceneManager:
         new_offsetz = 0.75
 
         # builds a wall of cubes
-        for z_offset in [0, 1]:   # z is up/down
+        for z_offset in [0, -1, 1]:   # z is up/down
             for y_offset in [2.5]:  # y is forward-backward
                 for x_offset in [0, -1, 1]:  # x is left-right
                     body_id = p.loadURDF(
@@ -294,18 +295,19 @@ def update_pos_and_orn(
     """
     # First convert into homogeneous coords
     # Then transform into new coordinate frame
+    # Then back to Cartesian coords
+
     del_pos = np.matmul(transform, [*velocity[:3], 1])
-    
-    # convert back into Cartesian coords
     for i in range(3):
         robot_pos[i] += (del_pos[i] / del_pos[-1]) * dt
 
-    # constant forward velocity
-    robot_pos[1] += 0.0 * dt
-
-    # del_orn = np.matmul(transform, [*velocity[3:], 1])
-    # for i in range(3):
-    #     robot_orn[i] += (del_orn[i] / del_orn[-1]) * dt
+    # Angular velocity should be transformed using only the rotation part
+    # Extract rotation matrix from transform (top-left 3x3)
+    R_transform = transform[:3, :3]
+    # Transform angular velocity: omega_world = R @ omega_camera
+    omega_world = R_transform @ velocity[3:6]
+    for i in range(3):
+        robot_orn[i] += omega_world[i] * dt
 
     return robot_pos, robot_orn
 
@@ -405,9 +407,22 @@ def main() -> None:
 
     # initialise the robot position and orientation (arbitrary)
     robot_pos = [0, 0, 1.0]    # [x, y, z]
-    robot_orientation = [0, 0, 0]
+    robot_orientation = [0.25, 0.25, 0.25]
+    robot_orientation = [0.3, 0.0, 0.0]
 
+    # set up scene
     _, _ = init_scene(robot_pos)
+
+    # retrieve static scene information
+    target_pos = SCENE_MANAGER.get_goal_position()
+
+    # for simulating no depth sensing / real-world
+    # in-sim, we can easily obtain the current distance to the object
+    # With real-world depth sensing, we will also have to segment out the goal object.
+    initial_dist_obj_goal = np.linalg.norm(target_pos - robot_pos)
+
+    import os
+    os.makedirs('/home/khw/IBVS-interbotix/src/dist_img', exist_ok=True)
 
     sleep(1)  # arbitrary sleep to let the scene load
     
@@ -427,39 +442,45 @@ def main() -> None:
         save_impath = f'/home/khw/IBVS-interbotix/src/dist_img/dist_img_{i}.png'
         cv2.imwrite(save_impath, cv2.cvtColor(rgb_img_arr, cv2.COLOR_RGB2BGR))
 
-        # import pdb; pdb.set_trace()
-
         src_kpts, tgt_kpts = match_superpoints(
             save_impath, TARGET_PATH
         )
 
-        assert len(src_kpts) == 0, "No Superpoints detected. It is recommended to reconfigure the experiment space."
+        assert len(src_kpts) > 0, "No Superpoints detected. It is recommended to reconfigure the experiment space."
         assert len(src_kpts) == len(tgt_kpts), "Error from match_superpoints()"
 
-        print(f"number of SuperPoints detected: {len(src_kpts)} vs {len(tgt_kpts)}")
+        # print(f"number of SuperPoints detected: {len(src_kpts)} vs {len(tgt_kpts)}")
 
         # Only use a subset of SuperPoints
-        K_sample_src, K_sample_tgt = motion_utils.sample_points(src_kpts, tgt_kpts, K)
+        try:
+            K_sample_src, K_sample_tgt = motion_utils.sample_points(src_kpts, tgt_kpts, K)
+        except:
+            K_sample_src, K_sample_tgt = src_kpts, tgt_kpts
 
-        error = motion_utils.get_error_mse(motion_utils.get_error_vec_K(K_sample_src, K_sample_tgt))
+        error_vec = motion_utils.get_error_vec_Ksample(src_kpts, tgt_kpts)
+        mse_error = motion_utils.get_error_mse(error_vec)
 
-        # Save image with error printed on it
-        save_image(error, i, rgb_img_arr, MIN_ERROR)
+        # Save image with error printed
+        save_image(mse_error, i, rgb_img_arr, MIN_ERROR)
 
-        # Uncomment for early exit conditioned on MSE divergence
-        update_error(error, iteration=i)
-
-        # init new velocity vector for this iteration
-        unit_velocity = np.zeros(6)
+        # UNcomment code for early exit conditioned on MSE divergence
+        # update_error(mse_error, iteration=i)
 
         #  Sets the velocity, transform vector, and update position and orientation
         #  This is a custom controller
         #  TODO: refactor into a controller class
-        unit_velocity = motion_utils.update_perpendicular_velocity(unit_velocity, K_sample_src, K_sample_tgt)
-        unit_velocity = motion_utils.update_forward_velocity(unit_velocity)
-        unit_velocity = motion_utils.update_angular_velocity(unit_velocity)
 
-        scaled_velocity = motion_utils.scale_velocity(unit_velocity, config)
+        vel = np.zeros(6)
+        vel = motion_utils.update_forward_velocity(vel, config, curr_robot_pos=robot_pos, goal_pos=target_pos)
+        vel = motion_utils.update_perpendicular_velocity(vel, K_sample_src, K_sample_tgt)
+        # vel = motion_utils.update_forward_velocity(vel, config,  d0 = initial_dist_obj_goal, i=i, dt=dt)     # Option 2:  setting a forward velocity based on d0
+        vel = motion_utils.update_angular_velocity(vel, K_sample_src, K_sample_tgt, lambda_gain=LAMBDA)
+        print(vel[3:6])
+
+        pass ; import pdb; pdb.set_trace()
+
+        # Scale each velocity dimension for easier use
+        scaled_velocity = motion_utils.scale_velocity(vel, config)
         transform = convert_to_transformation_matrix(robot_pos, robot_rot_matrix)
         robot_pos, robot_orientation = update_pos_and_orn(
             transform, scaled_velocity, robot_pos, robot_orientation, dt
@@ -472,5 +493,9 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+
+    import pdb
+    pdb.set_trace = lambda : 1  # COMMENT OUT if DEBUG, otherwise UNCOMMENT.
+
     main()
     # OLD_simple_forward()
