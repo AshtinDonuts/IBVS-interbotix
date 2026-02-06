@@ -145,7 +145,7 @@ def update_forward_velocity(vel: np.ndarray, config, curr_robot_pos = None, goal
 
         custom_dist_bool = True
         if custom_dist_bool:
-            _distance_to_goal -= 0.5  # stop before the image
+            _distance_to_goal -= 1.35  # stop before the image
 
         _forward_velocity = _gain * _distance_to_goal
 
@@ -316,3 +316,159 @@ def scale_velocity(velocity: np.ndarray, config: dict = None) -> np.ndarray:
         scaled_velocity[5] *= config.get('rz_scale', 1.0)
     
     return scaled_velocity
+
+def get_ibvs_velocity(
+    src_kpts: Union[List[List[float]], np.ndarray, torch.Tensor],
+    tgt_kpts: Union[List[List[float]], np.ndarray, torch.Tensor],
+    depth_buffer: np.ndarray,
+    img_config: dict,
+    lambda_gain: float = 1.0
+) -> np.ndarray:
+    """
+    Computes camera velocity using Chaumette's classical IBVS control law.
+    v = -lambda * L_s^+ * (s - s*)
+    
+    Args:
+        src_kpts: Current image keypoints (N, 2) in pixels
+        tgt_kpts: Target image keypoints (N, 2) in pixels
+        depth_buffer: Depth buffer from PyBullet (H, W)
+        img_config: Image configuration dictionary
+        lambda_gain: Control gain
+        
+    Returns:
+        velocity: 6D velocity vector [vx, vy, vz, wx, wy, wz]
+    """
+    # Convert inputs to numpy arrays
+    if isinstance(src_kpts, torch.Tensor):
+        src_kpts = np.array(src_kpts.cpu())
+    if isinstance(tgt_kpts, torch.Tensor):
+        tgt_kpts = np.array(tgt_kpts.cpu())
+        
+    # Get camera intrinsics
+    width = img_config['width']
+    height = img_config['height']
+    fov_rad = np.radians(img_config['fov'])
+    # Assuming square pixels and principal point at center
+    fx = fy = (width / 2.0) / np.tan(fov_rad / 2.0)
+    cx = width / 2.0
+    cy = height / 2.0
+    
+    # PyBullet depth buffer conversion to true depth
+    near = img_config['near_val']
+    far = img_config['far_val']
+    
+    # Interaction matrix and error vector
+    L_s_list = []
+    error_list = []
+    
+    for i in range(len(src_kpts)):
+        u, v = src_kpts[i]
+        u_star, v_star = tgt_kpts[i]
+        
+        # Convert to normalized coordinates
+        x = (u - cx) / fx
+        y = (v - cy) / fy
+        
+        x_star = (u_star - cx) / fx
+        y_star = (v_star - cy) / fy
+        
+        # Get depth at current point
+        # Clamp coordinates to image bounds
+        u_idx = int(np.clip(u, 0, width - 1))
+        v_idx = int(np.clip(v, 0, height - 1))
+        
+        # PyBullet depth buffer is (height, width)
+        d_buffer_val = depth_buffer[v_idx, u_idx]
+        
+        # Convert depth buffer to linear depth Z
+        # Z = far * near / (far - (far - near) * depth_buffer)
+        Z = far * near / (far - (far - near) * d_buffer_val)
+        
+        # Construct interaction matrix for this point (2x6)
+        # L_s = [[-1/Z, 0, x/Z, xy, -(1+x^2), y],
+        #        [0, -1/Z, y/Z, 1+y^2, -xy, -x]]
+        
+        # Note: PyBullet camera frame vs OpenCV camera frame
+        # OpenCV: x right, y down, z forward
+        # PyBullet: x right, y up, z backward (OpenGL convention) ??
+        # Actually PyBullet getCameraImage view matrix usually follows OpenGL:
+        # Camera looks down -Z. X is right, Y is up.
+        # But we usually want velocity in the robot/camera frame.
+        # Let's assume standard IBVS frame (Z forward).
+        # If the simulation uses a different frame, we might need coordinate transformation.
+        # Based on existing code, it seems we might need to be careful.
+        # Existing `jacobian` uses standard formula.
+        
+        L_point = np.array([
+            [-1/Z, 0, x/Z, x*y, -(1+x**2), y],
+            [0, -1/Z, y/Z, 1+y**2, -x*y, -x]
+        ])
+        
+        L_s_list.append(L_point)
+        
+        # Error: s - s*
+        error_list.append([x - x_star, y - y_star])
+        
+    # Stack interaction matrices: (2N, 6)
+    L_s = np.vstack(L_s_list)
+    
+    # Stack error vectors: (2N, 1)
+    error = np.array(error_list).flatten()
+    
+    # Compute pseudo-inverse
+    # Use damped pseudo-inverse or standard pinv
+    L_s_pinv = np.linalg.pinv(L_s)
+    
+    # Control law: v = -lambda * L_s^+ * e
+    vel = -lambda_gain * (L_s_pinv @ error)
+    
+    # The computed velocity is in the camera frame (OpenCV convention: x right, y down, z forward)
+    # We need to convert this to the robot frame used in simulation.
+    # In `update_pos_and_orn`:
+    # del_pos = np.matmul(transform, [*velocity[:3], 1])
+    # It seems `velocity` is expected in the camera frame (local frame).
+    # But we need to check if the camera frame matches the IBVS frame.
+    # IBVS frame: X right, Y down, Z forward.
+    # PyBullet camera setup in `capture_camera_image`:
+    # init_camera_vector = (0, 1, 0) # y axis (forward?)
+    # init_up_vector = (0, 0, 1) # z axis (up?)
+    # This suggests Robot Frame: Y is forward, Z is up, X is right.
+    # Camera Frame (View Matrix): usually -Z is forward in OpenGL.
+    
+    # Let's look at `convert_to_transformation_matrix`.
+    # It constructs a transform from robot pose.
+    # `update_pos_and_orn` transforms velocity from "local" to "world".
+    
+    # If we assume the velocity we compute is in the "Optical" frame (Z forward, Y down, X right),
+    # and the robot moves in (Y forward, Z up, X right).
+    # Optical -> Robot:
+    # Z_opt (forward) -> Y_rob (forward)
+    # Y_opt (down) -> -Z_rob (down)
+    # X_opt (right) -> X_rob (right)
+    
+    # So v_rob = [v_opt_x, v_opt_z, -v_opt_y, w_opt_x, w_opt_z, -w_opt_y]
+    
+    vx, vy, vz, wx, wy, wz = vel
+    
+    # Remap to Robot Frame (assuming standard PyBullet robot frame)
+    # This is a guess based on typical setups.
+    # However, `update_perpendicular_velocity` does:
+    # vel[0] += mean_displacement[0] (x)
+    # vel[2] += (-1) * mean_displacement[1] (z)
+    # This suggests X is X, and Z is Y-image-axis (vertical).
+    # So Image Y corresponds to Robot Z (inverted).
+    # Image X corresponds to Robot X.
+    # Image Depth (Z) corresponds to Robot Y (forward).
+    
+    # So:
+    # v_rob_x = v_opt_x
+    # v_rob_y = v_opt_z
+    # v_rob_z = -v_opt_y
+    
+    # w_rob_x = w_opt_x
+    # w_rob_y = w_opt_z
+    # w_rob_z = -w_opt_y
+    
+    vel_robot = np.array([vx, vz, -vy, wx, wz, -wy])
+    
+    return vel_robot

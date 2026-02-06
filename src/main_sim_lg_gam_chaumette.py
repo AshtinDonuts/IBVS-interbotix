@@ -1,0 +1,881 @@
+"""
+PVM-enhanced IBVS implementation.
+
+This uses LightGlue for general feature matching.
+
+"""
+
+import os
+import sys
+from pathlib import Path
+
+# Add the src directory to Python path for imports
+SRC_DIR = Path(__file__).resolve().parent
+if str(SRC_DIR) not in sys.path:
+    sys.path.append(str(SRC_DIR))
+
+
+import sys
+from time import sleep
+from typing import Tuple, List, Dict, Optional
+import pybullet as p
+import pybullet_data
+import numpy as np
+from pathlib import Path
+import yaml
+import cv2
+import csv
+import torch
+import argparse
+
+from image import convert_img_to_arr, save_image, get_image_config
+from superpoint_utils import match_superpoints
+import motion_utils
+from motion import LAMBDA
+from gsam2_terminator import TerminationHandler
+
+
+#  Simple config
+MAX_ITERATIONS = 200
+# TARGET_PATH = Path('/home/khw/IBVS-interbotix/assets/cat.png')
+# TARGET_PATH = Path('/home/khw/IBVS-interbotix/assets/resized_cat.png')
+# TARGET_PATH = Path('/home/khw/IBVS-interbotix/assets/aruco.png')
+
+TARGET_PATH = Path('/home/khw/IBVS-interbotix/assets/frame_031.png')  # A realistic target
+TEXTURE_PATH= Path('/home/khw/IBVS-interbotix/assets/resized_cat.png')  # This ensures we don't use a deformed texture
+K = 20
+
+# Appearance-Preserving Mask Configuration
+ENABLE_APPEARANCE_MASK = True  # Set to True to enable appearance-preserving mask segmentation before LightGlue matching
+GSAM2_TEXT_PROMPT_FOR_MASK = "cat."  # Text prompt for GSAM2 segmentation
+
+#  Error exit condition config
+MIN_ERROR = float("inf")  # Track absolute minimum for reference
+EWMA_ERROR = None  # Exponentially weighted moving average of error
+EWMA_ALPHA = 0.3  # Smoothing factor: higher = more weight on recent errors (0 < alpha < 1)
+EARLY_TERM_BOOL = False
+
+# Iteration-relative convergence termination
+# Convergence limit grows as iterations progress: limit = base * sqrt(iteration)
+# This guarantees eventual termination - we become more lenient over time
+CONVERGENCE_BASE = 1.0  # Base convergence threshold
+CONVERGENCE_START_ITER = 50  # Start checking convergence after this many iterations
+
+# Global scene manager instance for accessing object locations
+SCENE_MANAGER = None
+
+
+class SceneManager:
+    """
+    Helper class to manage the simulation scene and query object locations.
+    """
+
+    def __init__(self, robot_pos: list[float]) -> None:
+        self.robot_pos = robot_pos
+        self.plane_id: int | None = None
+        self.obstacles: List[int] = []
+        # Mapping from logical object name to pybullet body unique ID
+        self.objects: Dict[str, int] = {}
+        self.goal_id: int | None = None
+
+    def build_default_scene(self) -> Tuple[int, List[int]]:
+        """
+        Build the default scene: plane + wall of cubes with a goal cube.
+
+        Returns
+        -------
+        plane_id : int
+            The pybullet id of the plane.
+        obstacles : list[int]
+            List of pybullet ids for all obstacle cubes (first is the goal).
+        """
+        plane_id = p.loadURDF("plane.urdf")
+        self.plane_id = plane_id
+
+        # loading obstacles, with the main cube at the first index
+        base = self.robot_pos  # for now
+        base_orn = p.getQuaternionFromEuler([0, 0, 0])
+
+        # new offset for testing
+        new_offsetx = 0.75
+        new_offsetz = 0.75 + 1.0
+
+        # builds a wall of cubes
+        for z_offset in [0, -1, 1]:   # z is up/down
+            for y_offset in [2.5]:  # y is forward-backward
+                for x_offset in [0, -1, 1]:  # x is left-right
+                    body_id = p.loadURDF(
+                        "cube_small.urdf",
+                        [
+                            x_offset + new_offsetx,
+                            y_offset,
+                            z_offset + new_offsetz,
+                        ],
+                        base_orn,
+                        globalScaling=20,  # Remove or adjust as needed
+                    )
+                    self.obstacles.append(body_id)
+
+                    # give each obstacle a deterministic name based on its offsets
+                    name = f"cube_x{x_offset}_y{y_offset}_z{z_offset}"
+                    self.objects[name] = body_id
+
+        # texture the first cube (set as goal)
+        if self.obstacles:
+            goal_obs_id = self.obstacles[0]
+            self.goal_id = goal_obs_id
+            set_aruco_marker_texture(goal_obs_id)
+            self.objects["goal"] = goal_obs_id
+
+        return plane_id, self.obstacles
+
+    def get_object_position(self, name: str) -> np.ndarray:
+        """
+        Get the world position of an object by its logical name.
+
+        Parameters
+        ----------
+        name : str
+            Logical name used when creating the object (e.g. "goal",
+            "cube_x0_y2.5_z0").
+
+        Returns
+        -------
+        np.ndarray
+            3D position (x, y, z) in world coordinates.
+        """
+        if name not in self.objects:
+            raise KeyError(f"Object '{name}' not found in scene.")
+
+        body_id = self.objects[name]
+        pos, _ = p.getBasePositionAndOrientation(body_id)
+        return np.array(pos)
+
+    def get_goal_position(self) -> np.ndarray:
+        """
+        Convenience method to get the goal cube position.
+        """
+        if self.goal_id is None:
+            raise RuntimeError("Goal object has not been created yet.")
+        pos, _ = p.getBasePositionAndOrientation(self.goal_id)
+        return np.array(pos)
+
+
+class DataLogger:
+    """
+    Logger for recording simulation metrics at each timestep.
+    """
+    
+    def __init__(self, log_dir: Path, experiment_name: str = None):
+        """
+        Initialize the data logger.
+        
+        Parameters
+        ----------
+        log_dir : Path
+            Directory where log files will be saved.
+        experiment_name : str, optional
+            Name for this experiment run. If None, uses default name.
+        """
+        self.log_dir = Path(log_dir)
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Generate experiment name
+        if experiment_name is None:
+            experiment_name = "experiment"
+        
+        # Find next available file number
+        existing_files = list(self.log_dir.glob(f"{experiment_name}_*.csv"))
+        if existing_files:
+            # Extract numbers from existing files
+            numbers = []
+            for f in existing_files:
+                try:
+                    num = int(f.stem.split('_')[-1])
+                    numbers.append(num)
+                except ValueError:
+                    continue
+            next_num = max(numbers) + 1 if numbers else 1
+        else:
+            next_num = 1
+        
+        # Create CSV file
+        self.log_file = self.log_dir / f"{experiment_name}_{next_num:03d}.csv"
+        self.csv_file = open(self.log_file, 'w', newline='')
+        self.csv_writer = csv.writer(self.csv_file)
+        
+        # Write header
+        self.csv_writer.writerow([
+            'iteration',
+            'error_magnitude',
+            'distance_to_target',
+            'oracle_orientation_diff',  # norm of orientation diff against [0, 0, 0], which is the correct target pose.
+            'num_matched_keypoints',
+            'gam_similarity',
+            'ssim_score',
+            'robot_pos_x',
+            'robot_pos_y',
+            'robot_pos_z',
+            'robot_orn_x',
+            'robot_orn_y',
+            'robot_orn_z',
+            'target_pos_x',
+            'target_pos_y',
+            'target_pos_z',
+            'image_path'
+        ])
+        self.csv_file.flush()
+        
+        print(f"Data logger initialized. Log file: {self.log_file}")
+    
+    def log_iteration(
+        self,
+        iteration: int,
+        error_magnitude: float,
+        robot_pos: List[float],
+        robot_orn: List[float],
+        target_pos: np.ndarray,
+        num_matched_keypoints: int,
+        image_path: str,
+        gam_similarity: float = 0.0,
+        ssim_score: float = 0.0
+    ):
+        """
+        Log data for a single iteration.
+        
+        Parameters
+        ----------
+        iteration : int
+            Current iteration number.
+        error_magnitude : float
+            MSE error magnitude.
+        robot_pos : List[float]
+            Current robot position [x, y, z].
+        robot_orn : List[float]
+            Current robot orientation [roll, pitch, yaw].
+        target_pos : np.ndarray
+            Target position [x, y, z].
+        num_matched_keypoints : int
+            Number of matched keypoints between live and target.
+        image_path : str
+            Path to the saved image for this iteration.
+        gam_similarity : float
+            GAM (mask-based) similarity score.
+        ssim_score : float
+            SSIM similarity score.
+        """
+        # Calculate distance to target
+        distance_to_target = np.linalg.norm(np.array(target_pos) - np.array(robot_pos))
+        
+        # Calculate oracle orientation difference
+        orientation_diff = np.linalg.norm(robot_orn)  # Magnitude of orientation angles
+        
+        # Write row
+        self.csv_writer.writerow([
+            iteration,
+            f"{error_magnitude:.6f}",
+            f"{distance_to_target:.6f}",
+            f"{orientation_diff:.6f}",
+            num_matched_keypoints,
+            f"{gam_similarity:.6f}",
+            f"{ssim_score:.6f}",
+            f"{robot_pos[0]:.6f}",
+            f"{robot_pos[1]:.6f}",
+            f"{robot_pos[2]:.6f}",
+            f"{robot_orn[0]:.6f}",
+            f"{robot_orn[1]:.6f}",
+            f"{robot_orn[2]:.6f}",
+            f"{target_pos[0]:.6f}",
+            f"{target_pos[1]:.6f}",
+            f"{target_pos[2]:.6f}",
+            image_path
+        ])
+        self.csv_file.flush()
+    
+    def close(self):
+        """Close the log file."""
+        if self.csv_file and not self.csv_file.closed:
+            self.csv_file.close()
+            print(f"Data log saved to: {self.log_file}")
+    
+    def __enter__(self):
+        """Context manager entry."""
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit."""
+        self.close()
+
+
+def load_config(config_path='config.yaml'):
+    """Load configuration from YAML file."""
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
+    return config
+
+
+def init_pybullet() -> int:
+    """
+    initialises the pybullet scene
+    """
+    # pclient = p.connect(p.GUI)  # p.GUI/p.DIRECT 
+    pclient = p.connect(p.DIRECT)  # p.GUI/p.DIRECT 
+    p.setAdditionalSearchPath(pybullet_data.getDataPath())
+    p.setGravity(0, 0, 0)  # Turn off gravity
+    # p.setRealTimeSimulation(True)
+
+    return pclient
+
+def set_aruco_marker_texture(obstacle_id: int) -> None:
+    """
+    sets the aruco marker texture on the obstacle
+    """
+    texture_id = p.loadTexture(str(TEXTURE_PATH))
+    p.changeVisualShape(obstacle_id, -1, textureUniqueId=texture_id)
+
+
+def init_scene(robot_pos: list[float]) -> Tuple[int, List[int]]:
+    """
+    Initialise the scene and return created objects.
+
+    This function now uses a global `SceneManager` instance so that
+    object locations can be queried later in the program.
+
+    Returns
+    -------
+    plane_id : int
+        The pybullet id of the plane.
+    obstacles : list[int]
+        List of pybullet ids for all obstacle cubes (first is the goal).
+    """
+    global SCENE_MANAGER
+    SCENE_MANAGER = SceneManager(robot_pos)
+    plane_id, obstacles = SCENE_MANAGER.build_default_scene()
+    return plane_id, obstacles
+
+
+def get_robot_rotation_matrix(robot_orientation: List[float]) -> np.ndarray:
+    """
+    gets the robot rotation matrix on the basis of the orientation
+    """
+    robot_rotation_matrix = p.getMatrixFromQuaternion(
+        p.getQuaternionFromEuler(robot_orientation)
+    )
+    return np.array(object=robot_rotation_matrix).reshape(3, 3)
+
+
+def get_view_matrix(
+    init_camera_vector: Tuple[int, int, int],
+    init_up_vector: Tuple[int, int, int],
+    robot_pos: List[float],
+    robot_rotation_matrix: np.ndarray,
+) -> np.ndarray:
+    """
+    get the view matrix for the camera
+    """
+    camera_vector = np.dot(robot_rotation_matrix, init_camera_vector)
+    up_vector = np.dot(robot_rotation_matrix, init_up_vector)
+    return p.computeViewMatrix(robot_pos, robot_pos + camera_vector, up_vector)
+
+
+def get_projection_matrix() -> np.ndarray:
+    """
+    get the projection matrix for the camera
+    """
+    image_conf = get_image_config()
+    return p.computeProjectionMatrixFOV(
+        image_conf["fov"],
+        image_conf["aspect"],
+        image_conf["near_val"],
+        image_conf["far_val"],
+    )
+
+def convert_to_transformation_matrix(
+    robot_pos: List[float], robot_rotation_matrix: np.ndarray) -> np.ndarray:
+    """
+    create the transformation matrix to convert from image (world) coordinates to local
+        camera coordinates
+    """
+    # creating the translation matrix (SE(3))
+    t_c = np.zeros((4, 4))
+    for i, val in enumerate(robot_pos):
+        t_c[i][3] = -val
+        t_c[i][i] = 1
+    t_c[3][3] = 1
+
+    # creating the rotational matrix (SE(3))
+    r_i = np.zeros((4, 4))
+    for i in range(3):
+        for j in range(3):
+            r_i[i][j] = robot_rotation_matrix[i][j]
+    r_i[3][3] = 1
+    
+    # multiply the translation and rotation together to create a single transformation matrix (SE(3))
+    transform = np.matmul(r_i, t_c)
+
+    return transform
+
+def capture_camera_image(
+    robot_pos: List[float], robot_rotation_matrix: np.ndarray) -> np.ndarray:
+    """
+    captures the image from the camera on the basis of the robot position and rotation matrix
+    """
+    image_conf = get_image_config()
+
+    # robot rotation matrix
+    # initial camera vectors
+    init_camera_vector = (0, 1, 0)  # y axis
+    init_up_vector = (0, 0, 1)  # z axis
+
+    # calculating the view matrix
+    view_matrix = get_view_matrix(
+        init_camera_vector,
+        init_up_vector,
+        robot_pos,
+        robot_rotation_matrix,
+    )
+    # calculating the projection matrix
+    projection_matrix = get_projection_matrix()
+
+
+    # capturing the image
+    # -------------------
+    # p.getCameraImage
+    # width (int) – Width of the rendered image.
+    # height (int) – Height of the rendered image.
+    # rgbImg (list or np.array) – Color image data in RGBA format (depending on settings).
+    # depthImg (list or np.array) – Depth image data. The values are typically normalized between 0 and 1, unless a custom projection is used.
+    # segImg (list or np.array) – Segmentation mask. Contains object unique IDs
+
+    img_details = p.getCameraImage(
+        image_conf["width"],
+        image_conf["height"],
+        view_matrix,
+        projection_matrix,
+    )
+    return img_details  # (width, height, rgbImg, depthImg, segImg)
+
+def update_pos_and_orn(
+    transform: np.ndarray,
+    velocity: np.ndarray,
+    robot_pos: List[float],
+    robot_orn: List[float],
+    dt: float,
+    ) -> Tuple[List[float], List[float]]:
+    """
+    returns the updated position and orientation of the robot
+    """
+    # First convert into homogeneous coords
+    # Then transform into new coordinate frame
+    # Then back to Cartesian coords
+
+    del_pos = np.matmul(transform, [*velocity[:3], 1])
+    for i in range(3):
+        robot_pos[i] += (del_pos[i] / del_pos[-1]) * dt
+
+    # Angular velocity should be transformed using only the rotation part
+    # Extract rotation matrix from transform (top-left 3x3)
+    R_transform = transform[:3, :3]
+    # Transform angular velocity: omega_world = R @ omega_camera
+    omega_world = R_transform @ velocity[3:6]
+    for i in range(3):
+        robot_orn[i] += omega_world[i] * dt
+
+    return robot_pos, robot_orn
+
+def update_error(error_mag: float, iteration: int | None = None) -> None:
+    """
+    Updates error metrics using exponentially weighted moving average (EWMA).
+    Terminates when convergence is detected using iteration-relative threshold.
+    
+    Convergence limit grows with iteration count: limit = base * sqrt(iteration)
+    This guarantees eventual termination by becoming more lenient over time.
+    """
+
+    global MIN_ERROR
+    global EWMA_ERROR
+    global EARLY_TERM_BOOL
+
+    if iteration is not None:
+        print(f"{iteration}:", end="")
+    
+    # Update absolute minimum (for reference)
+    if error_mag < MIN_ERROR:
+        MIN_ERROR = error_mag
+    
+    # Initialize or update EWMA
+    if EWMA_ERROR is None:
+        # First iteration: initialize EWMA with current error
+        EWMA_ERROR = error_mag
+        print(f"initialized EWMA: {EWMA_ERROR:.6f}")
+        return
+    
+    # Calculate new EWMA: EWMA_new = alpha * current + (1 - alpha) * EWMA_old
+    old_ewma = EWMA_ERROR
+    EWMA_ERROR = EWMA_ALPHA * error_mag + (1 - EWMA_ALPHA) * EWMA_ERROR
+    
+    # Calculate change in EWMA
+    ewma_change = abs(EWMA_ERROR - old_ewma)
+    
+    # Check convergence after minimum iterations
+    if iteration is not None and iteration >= CONVERGENCE_START_ITER:
+        # Calculate iteration-relative convergence limit
+        # Limit increases as iterations increase: more lenient, guarantees termination
+        convergence_limit = CONVERGENCE_BASE * (iteration ** 0.5)
+        
+        if ewma_change < convergence_limit:
+            # Converged!
+            EARLY_TERM_BOOL = True
+            print(f"CONVERGED (EWMA change: {ewma_change:.8f} < limit: {convergence_limit:.8f}) "
+                  f"[error: {error_mag:.6f}, EWMA: {EWMA_ERROR:.6f}, min: {MIN_ERROR:.6f}]")
+            print(f"\n{'='*60}")
+            print(f"CONVERGENCE ACHIEVED at iteration {iteration}")
+            print(f"EWMA change: {ewma_change:.8f}")
+            print(f"Convergence limit: {convergence_limit:.8f} (= {CONVERGENCE_BASE:.8f} * sqrt({iteration}))")
+            print(f"Final EWMA: {EWMA_ERROR:.6f}")
+            print(f"Final error: {error_mag:.6f}")
+            print(f"MIN_ERROR: {MIN_ERROR:.6f}")
+            print(f"{'='*60}\n")
+        else:
+            # Not converged yet
+            if error_mag < old_ewma:
+                status = "improving"
+            else:
+                status = "not improving"
+            print(f"{status} (EWMA change: {ewma_change:.8f}, limit: {convergence_limit:.8f}) "
+                  f"[error: {error_mag:.6f}, EWMA: {EWMA_ERROR:.6f}, min: {MIN_ERROR:.6f}]")
+    else:
+        # Before convergence checking starts
+        if error_mag < old_ewma:
+            status = "improving"
+        else:
+            status = "not improving"
+        print(f"{status} (EWMA change: {ewma_change:.8f}) "
+              f"[error: {error_mag:.6f}, EWMA: {EWMA_ERROR:.6f}, min: {MIN_ERROR:.6f}]")
+    
+
+def get_masked_rgb_image(segmentation_terminator, image_path: str) -> Optional[np.ndarray]:
+    """
+    Get appearance-preserving masked RGB image using GSAM2.
+    
+    This function segments the target object in the image and returns a masked
+    RGB image where the background is zeroed out, but the object's appearance
+    (RGB values) is preserved. This allows feature matchers like LightGlue to
+    focus on the object of interest while maintaining visual features.
+    
+    Parameters
+    ----------
+    segmentation_terminator : SegmentationTerminator
+        The GSAM2 terminator instance with loaded models
+    image_path : str
+        Path to the image file to be masked
+        
+    Returns
+    -------
+    np.ndarray or None
+        Masked RGB image (H x W x 3) with background zeroed out. 
+        Returns None if no object detected.
+    """
+    from PIL import Image
+    
+    # Load image
+    image = Image.open(image_path).convert("RGB")
+    image_np = np.array(image)
+    
+    # Set image for SAM2
+    segmentation_terminator.sam2_predictor.set_image(image_np)
+    
+    # Run Grounding DINO detection
+    inputs = segmentation_terminator.processor(
+        images=image, 
+        text=segmentation_terminator.text_prompt, 
+        return_tensors="pt"
+    ).to(segmentation_terminator.device)
+    
+    with torch.no_grad():
+        outputs = segmentation_terminator.grounding_model(**inputs)
+    
+    results = segmentation_terminator.processor.post_process_grounded_object_detection(
+        outputs,
+        inputs.input_ids,
+        threshold=segmentation_terminator.box_threshold,
+        text_threshold=segmentation_terminator.text_threshold,
+        target_sizes=[image.size[::-1]]
+    )
+    
+    # Check if any objects were detected
+    if len(results) == 0 or len(results[0]["boxes"]) == 0:
+        print(f"Warning: No objects detected in {image_path}")
+        return None
+    
+    # Get bounding boxes for SAM2
+    input_boxes = results[0]["boxes"].cpu().numpy()
+    
+    # Get segmentation masks
+    masks, scores, logits = segmentation_terminator.sam2_predictor.predict(
+        point_coords=None,
+        point_labels=None,
+        box=input_boxes,
+        multimask_output=False,
+    )
+    
+    # Convert shape to (n, H, W) if needed
+    if masks.ndim == 4:
+        masks = masks.squeeze(1)
+    
+    # Combine all masks (logical OR)
+    combined_mask = np.any(masks, axis=0)
+    
+    # Apply mask to RGB image (preserve appearance)
+    masked_rgb = image_np.copy()
+    masked_rgb[~combined_mask] = 0  # Set background to black
+    
+    return masked_rgb
+
+
+## ============ Driving code ============== ##
+
+def parse_args():
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(description='IBVS Simulation with LightGlue and GAM')
+    
+    # Robot initial position
+    parser.add_argument('--robot-pos', type=float, nargs=3, default=[0, 0, 1.0],
+                        metavar=('X', 'Y', 'Z'),
+                        help='Initial robot position [x, y, z] (default: [0, 0, 1.0])')
+    
+    # Robot initial orientation
+    parser.add_argument('--robot-orn', type=float, nargs=3, default=[0, 0, 0],
+                        metavar=('ROLL', 'PITCH', 'YAW'),
+                        help='Initial robot orientation [roll, pitch, yaw] in radians (default: [0, 0, 0])')
+    
+    return parser.parse_args()
+
+def main() -> None:
+    """
+    the main flow
+    """
+    # Parse command-line arguments
+    args = parse_args()
+    
+    # Load configuration
+    config = load_config(Path(__file__).parent / 'config.yaml')
+    
+    _ = init_pybullet()
+    img_conf = get_image_config()
+    dt: float = 0.005
+
+    # initialise the robot position and orientation from arguments
+    robot_pos = list(args.robot_pos)    # [x, y, z]
+    robot_orientation = list(args.robot_orn)  # [roll, pitch, yaw]
+
+    # set up scene
+    _, _ = init_scene(robot_pos)
+
+    # retrieve static scene information
+    target_pos = SCENE_MANAGER.get_goal_position()
+
+    # for simulating no depth sensing / real-world
+    # in-sim, we can easily obtain the current distance to the object
+    # With real-world depth sensing, we will also have to segment out the goal object.
+    initial_dist_obj_goal = np.linalg.norm(target_pos - robot_pos)
+
+    # Initialize data logger
+    log_dir = Path(__file__).parent / 'logs'
+    data_logger = DataLogger(log_dir, experiment_name='ibvs_sim')
+
+    # Initialize termination handler (using Grounded SAM2)
+    termination_handler = TerminationHandler(
+        target_image_path=str(TARGET_PATH),
+        text_prompt="cat.",
+        similarity_threshold=0.15,  # 15% difference threshold
+        box_threshold=0.35,
+        text_threshold=0.25,
+        enabled=True  # Set to False to disable segmentation termination
+    )
+
+    # Initialize appearance-preserving mask segmentation for LightGlue matching
+    mask_segmentation_terminator = None
+    target_masked_rgb_path = None
+    appearance_mask_enabled = ENABLE_APPEARANCE_MASK
+    
+    if appearance_mask_enabled:
+        from gsam2_terminator import SegmentationTerminator
+        print("\n" + "="*60)
+        print("Initializing Appearance-Preserving Mask Segmentation")
+        print("="*60)
+        print("Creating segmentation masks for LightGlue feature matching")
+        print(f"Text prompt: '{GSAM2_TEXT_PROMPT_FOR_MASK}'")
+        print("="*60 + "\n")
+        
+        # Create a separate segmentation terminator for masking
+        # (separate from the termination_handler which is used for convergence checking)
+        mask_segmentation_terminator = SegmentationTerminator(
+            text_prompt=GSAM2_TEXT_PROMPT_FOR_MASK,
+            similarity_threshold=0.15,
+            box_threshold=0.35,
+            text_threshold=0.25
+        )
+        
+        # Create masked target image for LightGlue
+        print(f"Creating appearance-preserving masked target image...")
+        target_masked_rgb = get_masked_rgb_image(mask_segmentation_terminator, str(TARGET_PATH))
+        if target_masked_rgb is not None:
+            # Save masked target for LightGlue
+            img_dir = Path(__file__).parent / 'img'
+            img_dir.mkdir(parents=True, exist_ok=True)
+            target_masked_rgb_path = img_dir / 'target_masked.png'
+            cv2.imwrite(str(target_masked_rgb_path), cv2.cvtColor(target_masked_rgb, cv2.COLOR_RGB2BGR))
+            print(f"✓ Masked target image saved to: {target_masked_rgb_path}")
+            print(f"✓ Will perform LightGlue matching on masked images\n")
+        else:
+            print("WARNING: Could not create masked target image - will use original images")
+            appearance_mask_enabled = False
+
+    sleep(1)  # arbitrary sleep to let the scene load
+    
+    for i in range(100):
+
+        p.stepSimulation()
+        robot_rot_matrix = get_robot_rotation_matrix(robot_orientation) 
+
+        img = capture_camera_image(robot_pos, robot_rot_matrix)   # (width, height, rgbaImg, depthImg, segImg)
+
+        rgba = img[2]       # rgbaImg : (h x w x 4)
+        rgba_arr = convert_img_to_arr(
+            rgba, int(img_conf["height"]), int(img_conf["width"])
+        )
+        rgb_img_arr = rgba_arr[:, :, :3]  # remove alpha channel [..,4] -> [..,3]
+
+        save_impath = '/tmp/ibvs_dist_img.png'
+        cv2.imwrite(save_impath, cv2.cvtColor(rgb_img_arr, cv2.COLOR_RGB2BGR))
+
+        # Prepare images for feature matching
+        # If appearance-preserving masking is enabled, use masked images; otherwise use original
+        current_match_path = save_impath
+        target_match_path = TARGET_PATH
+        
+        if appearance_mask_enabled and mask_segmentation_terminator is not None and target_masked_rgb_path is not None:
+            # Create masked version of current image
+            current_masked_rgb = get_masked_rgb_image(mask_segmentation_terminator, save_impath)
+            if current_masked_rgb is not None:
+                # Save masked current image
+                current_masked_path = '/tmp/ibvs_dist_img_masked.png'
+                cv2.imwrite(current_masked_path, cv2.cvtColor(current_masked_rgb, cv2.COLOR_RGB2BGR))
+                
+                # Use masked images for matching
+                current_match_path = current_masked_path
+                target_match_path = target_masked_rgb_path
+                
+                print(f"[Iteration {i}] Using appearance-preserving masked images for LightGlue matching")
+
+            else:
+                print(f"[Iteration {i}] Warning: Could not create mask, using original images")
+        
+        # Perform feature matching (on masked or original images)
+        src_kpts, tgt_kpts = match_superpoints(
+            current_match_path, target_match_path
+        )
+
+        assert len(src_kpts) > 0, "No Superpoints detected. It is recommended to reconfigure the experiment space."
+        assert len(src_kpts) == len(tgt_kpts), "Error from match_superpoints()"
+
+        # Only use a subset of SuperPoints
+        # TODO: change to allow accessing SuperPoints configuration directly
+        try:
+            K_sample_src, K_sample_tgt = motion_utils.sample_points(src_kpts, tgt_kpts, K)
+        except:
+            K_sample_src, K_sample_tgt = src_kpts, tgt_kpts
+
+        error_vec = motion_utils.get_error_vec_Ksample(src_kpts, tgt_kpts)
+        mse_error = motion_utils.get_error_mse(error_vec)
+
+        # Save image with error printed
+        if i % 2 == 0:
+            save_image(mse_error, i, rgb_img_arr, MIN_ERROR)
+
+        # Compute GAM similarity scores for logging
+        metrics = termination_handler.compute_metrics(save_impath)
+        gam_similarity = metrics["mask_similarity"]
+        ssim_score = metrics["ssim_score"]
+        
+        # Log iteration data
+        data_logger.log_iteration(
+            iteration=i,
+            error_magnitude=mse_error,
+            robot_pos=robot_pos,
+            robot_orn=robot_orientation,
+            target_pos=target_pos,
+            num_matched_keypoints=len(src_kpts),
+            image_path=save_impath,
+            gam_similarity=gam_similarity,
+            ssim_score=ssim_score
+        )
+
+        # Early exit test
+        # update_error(mse_error, iteration=i)
+
+        #  Sets the velocity, transform vector, and update position and orientation
+        #  Chaumette IBVS Control
+        
+        depth_img = img[3]
+        vel = motion_utils.get_ibvs_velocity(
+            src_kpts=K_sample_src,
+            tgt_kpts=K_sample_tgt,
+            depth_buffer=depth_img,
+            img_config=img_conf,
+            lambda_gain=LAMBDA
+        )
+        print(f"IBVS Vel: {vel}")
+
+        # Scale each velocity dimension for easier use
+        scaled_velocity = motion_utils.scale_velocity(vel, config)
+        transform = convert_to_transformation_matrix(robot_pos, robot_rot_matrix)
+        robot_pos, robot_orientation = update_pos_and_orn(
+            transform, scaled_velocity, robot_pos, robot_orientation, dt
+        )
+
+        sleep(0.01)  # sleep to let the changes take place
+
+        # Early termination
+        # We perform 2-fold termination checking
+        # We only perform similarity checking when sufficiently close to the target.
+        distance_to_goal = np.linalg.norm(robot_pos - target_pos)
+        DIST_THRESHOLD = 0.3
+        if distance_to_goal < DIST_THRESHOLD:
+            print(f"Distance to goal ({distance_to_goal:.3f}) < threshold ({DIST_THRESHOLD}). \
+                    Now checking against PVM-based similarity")
+            # Check termination condition using segmentation mask similarity
+            if termination_handler.check_termination(save_impath, iteration=i):
+                break
+
+        if EARLY_TERM_BOOL:
+            break
+
+
+    # Close data logger
+    data_logger.close()
+    
+    # Print summary
+    print(f"\n{'='*60}")
+    print(f"SIMULATION COMPLETE")
+    print(f"{'='*60}")
+    print(f"Total iterations: {i + 1}")
+    print(f"Appearance-preserving masking: {'ENABLED' if appearance_mask_enabled else 'DISABLED'}")
+    if appearance_mask_enabled and target_masked_rgb_path is not None:
+        print(f"Masked target image: {target_masked_rgb_path}")
+        print(f"Segmentation prompt: '{GSAM2_TEXT_PROMPT_FOR_MASK}'")
+    print(f"Data logged to: {data_logger.log_file}")
+    print(f"{'='*60}\n")
+    
+    p.disconnect()
+    sys.exit(0)
+
+
+if __name__ == "__main__":
+
+    import pdb
+    pdb.set_trace = lambda : 1  # COMMENT OUT if DEBUG, otherwise UNCOMMENT.
+
+    main()
+    # OLD_simple_forward()

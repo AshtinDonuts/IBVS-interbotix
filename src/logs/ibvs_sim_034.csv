@@ -1,0 +1,1 @@
+iteration,error_magnitude,distance_to_target,oracle_orientation_diff,num_matched_keypoints,gam_similarity,ssim_score,robot_pos_x,robot_pos_y,robot_pos_z,robot_orn_x,robot_orn_y,robot_orn_z,target_pos_x,target_pos_y,target_pos_z,image_path

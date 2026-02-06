@@ -26,6 +26,7 @@ import yaml
 import cv2
 import csv
 import torch
+import argparse
 
 from image import convert_img_to_arr, save_image, get_image_config
 from superpoint_utils import match_superpoints
@@ -623,10 +624,29 @@ def get_masked_rgb_image(segmentation_terminator, image_path: str) -> Optional[n
 
 ## ============ Driving code ============== ##
 
+def parse_args():
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(description='IBVS Simulation with LightGlue and GAM')
+    
+    # Robot initial position
+    parser.add_argument('--robot-pos', type=float, nargs=3, default=[0, 0, 1.0],
+                        metavar=('X', 'Y', 'Z'),
+                        help='Initial robot position [x, y, z] (default: [0, 0, 1.0])')
+    
+    # Robot initial orientation
+    parser.add_argument('--robot-orn', type=float, nargs=3, default=[0, 0, 0],
+                        metavar=('ROLL', 'PITCH', 'YAW'),
+                        help='Initial robot orientation [roll, pitch, yaw] in radians (default: [0, 0, 0])')
+    
+    return parser.parse_args()
+
 def main() -> None:
     """
     the main flow
     """
+    # Parse command-line arguments
+    args = parse_args()
+    
     # Load configuration
     config = load_config(Path(__file__).parent / 'config.yaml')
     
@@ -634,10 +654,9 @@ def main() -> None:
     img_conf = get_image_config()
     dt: float = 0.005
 
-    # initialise the robot position and orientation (arbitrary)
-    robot_pos = [0, 0, 1.0]    # [x, y, z]
-    robot_orientation = [0.25, 0.25, 0.25]
-    robot_orientation = [0.1, 0.1, 0.1]
+    # initialise the robot position and orientation from arguments
+    robot_pos = list(args.robot_pos)    # [x, y, z]
+    robot_orientation = list(args.robot_orn)  # [roll, pitch, yaw]
 
     # set up scene
     _, _ = init_scene(robot_pos)

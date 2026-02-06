@@ -5,3 +5,7 @@ src/dist_img
 
 img/
 src/__pycache__/
+
+results/*.csv
+
+src/straight_line_img

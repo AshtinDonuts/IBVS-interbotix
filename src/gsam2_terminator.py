@@ -35,6 +35,9 @@ class SegmentationTerminator:
     """
     Uses Grounded SAM2 to compare segmentation masks between current and target images.
     Terminates when mask sizes are similar, indicating proper object positioning.
+    
+    Similarity is computed as: min(current, target) / max(current, target)
+    This gives a score between 0 (completely different) and 1 (identical).
     """
     
     def __init__(
@@ -65,7 +68,9 @@ class SegmentationTerminator:
         device : str, optional
             Device to run on ('cuda' or 'cpu'). Auto-detects if None.
         similarity_threshold : float
-            Relative difference threshold for mask size similarity (0.15 = 15%)
+            Tolerance threshold for mask size similarity (0.15 = 15% tolerance).
+            Terminates when similarity >= (1.0 - threshold).
+            E.g., 0.15 means accept similarity >= 85%.
         box_threshold : float
             Confidence threshold for bounding box detection
         text_threshold : float
@@ -346,7 +351,7 @@ class SegmentationTerminator:
         current_mask_size : float
             Mask size of current image
         similarity : float
-            Relative difference between current and target mask sizes
+            Similarity score between 0.0 and 1.0 (1.0 = identical sizes)
         """
         if self.target_mask_size is None:
             raise RuntimeError("Target mask size not set. Call set_target_mask_size() first.")
@@ -355,15 +360,18 @@ class SegmentationTerminator:
         
         # Handle case where no object detected
         if current_mask_size == 0 or self.target_mask_size == 0:
-            return False, current_mask_size, float('inf')
+            return False, current_mask_size, 0.0
         
-        # Calculate relative difference
-        relative_diff = abs(current_mask_size - self.target_mask_size) / self.target_mask_size
+        # Calculate similarity score (bounded between 0 and 1)
+        # similarity = min(current, target) / max(current, target)
+        # 1.0 = identical sizes, approaches 0.0 as sizes diverge
+        similarity = min(current_mask_size, self.target_mask_size) / max(current_mask_size, self.target_mask_size)
         
-        # Check if similar enough
-        terminate = relative_diff < self.similarity_threshold
+        # Check if similar enough (similarity should be >= 1 - threshold)
+        # e.g., threshold=0.15 means we want similarity >= 0.85 (85%)
+        terminate = similarity >= (1.0 - self.similarity_threshold)
         
-        return terminate, current_mask_size, relative_diff
+        return terminate, current_mask_size, similarity
     
     def should_terminate_ssim(self, current_image_path: str, ssim_threshold: float = 0.85) -> Tuple[bool, float]:
         """
@@ -425,7 +433,9 @@ class TerminationHandler:
         text_prompt : str
             Object detection prompt (e.g., "cube.", "cat.") - used in both modes
         similarity_threshold : float
-            Threshold for mask size similarity (default: 0.15 = 15%) - only used in 'mask_size' mode
+            Tolerance for mask size similarity (default: 0.15 = 15% tolerance).
+            Terminates when similarity >= (1 - threshold), e.g., 0.15 means >= 85% similar.
+            Only used in 'mask_size' mode.
         ssim_threshold : float
             Threshold for SSIM on segmented objects (default: 0.85) - only used in 'ssim' mode
         enabled : bool
@@ -448,42 +458,57 @@ class TerminationHandler:
         
         if self.enabled:
             print("\n" + "="*60)
+            print("Initializing Grounded SAM2 for termination and logging...")
+            print("="*60 + "\n")
+            
+            self.terminator = SegmentationTerminator(
+                text_prompt=text_prompt,
+                similarity_threshold=similarity_threshold,
+                **kwargs
+            )
+            
+            # Always initialize both metrics for logging purposes
+            self.terminator.set_target_mask_size(target_image_path)
+            self.terminator.set_target_image(target_image_path)
             
             if mode == 'mask_size':
-                print("Initializing Grounded SAM2 for mask-based termination...")
-                print("="*60 + "\n")
-                
-                self.terminator = SegmentationTerminator(
-                    text_prompt=text_prompt,
-                    similarity_threshold=similarity_threshold,
-                    **kwargs
-                )
-                
-                # Set target mask size
-                self.terminator.set_target_mask_size(target_image_path)
-                
+                print("Mode: Mask Size Termination")
             elif mode == 'ssim':
-                print("Initializing SSIM-based termination on segmented objects...")
-                print(f"SSIM threshold: {ssim_threshold}")
-                print("Note: SSIM will be computed on segmented object regions, not whole images")
-                print("="*60 + "\n")
-                
-                # SSIM mode also uses SAM2 to segment objects first
-                self.terminator = SegmentationTerminator(
-                    text_prompt=text_prompt,
-                    similarity_threshold=similarity_threshold,
-                    **kwargs
-                )
-                
-                # Set target segmented object for SSIM comparison
-                self.terminator.set_target_image(target_image_path)
-            
+                print(f"Mode: SSIM Termination (threshold: {ssim_threshold})")
             else:
                 raise ValueError(f"Invalid mode: {mode}. Must be 'mask_size' or 'ssim'.")
             
             print("\n" + "="*60 + "\n")
         else:
             print("Termination checking disabled.")
+
+    def compute_metrics(self, current_image_path: str) -> dict:
+        """
+        Compute both mask-based and SSIM-based similarity metrics.
+        
+        Returns
+        -------
+        dict
+            Dictionary containing 'mask_similarity' and 'ssim_score'
+        """
+        if not self.enabled or self.terminator is None:
+            return {"mask_similarity": 0.0, "ssim_score": 0.0}
+            
+        # Compute mask similarity
+        current_mask_size = self.terminator.get_mask_size(current_image_path)
+        if current_mask_size == 0 or self.terminator.target_mask_size == 0:
+            mask_similarity = 0.0
+        else:
+            mask_similarity = min(current_mask_size, self.terminator.target_mask_size) / max(current_mask_size, self.terminator.target_mask_size)
+            
+        # Compute SSIM
+        ssim_score = self.terminator.compute_ssim(current_image_path)
+        
+        return {
+            "mask_similarity": mask_similarity,
+            "ssim_score": ssim_score,
+            "current_mask_size": current_mask_size
+        }
     
     def check_termination(self, current_image_path: str, iteration: int = None) -> bool:
         """
@@ -514,7 +539,7 @@ class TerminationHandler:
             # Print status
             print(f"{iter_str}Mask size: current={current_mask_size:.0f}, "
                   f"target={self.terminator.target_mask_size:.0f}, "
-                  f"diff={similarity:.2%}")
+                  f"similarity={similarity:.2%}")
             
             if should_terminate:
                 self._print_termination_message_mask(
@@ -549,8 +574,8 @@ class TerminationHandler:
         """Print formatted termination message for mask size mode."""
         print("\n" + "="*60)
         print("TERMINATION CONDITION MET! (Mask Size)")
-        print(f"Mask size similarity achieved: {similarity:.2%} < "
-              f"{self.terminator.similarity_threshold:.2%}")
+        print(f"Mask size similarity achieved: {similarity:.2%} >= "
+              f"{(1.0 - self.terminator.similarity_threshold):.2%}")
         print(f"Current mask size: {current_mask_size:.0f} pixels")
         print(f"Target mask size: {self.terminator.target_mask_size:.0f} pixels")
         if iteration is not None:

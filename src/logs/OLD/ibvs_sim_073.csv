@@ -1,0 +1,2 @@
+iteration,error_magnitude,distance_to_target,oracle_orientation_diff,num_matched_keypoints,robot_pos_x,robot_pos_y,robot_pos_z,robot_orn_x,robot_orn_y,robot_orn_z,target_pos_x,target_pos_y,target_pos_z,image_path
+0,47228.777344,2.622022,1.414214,3,1.000000,0.000000,1.000000,0.000000,1.000000,1.000000,0.750000,2.500000,1.750000,/tmp/ibvs_dist_img.png

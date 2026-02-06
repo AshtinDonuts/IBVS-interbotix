@@ -160,13 +160,10 @@ def main():
     itr = 0
 
     try:
-
         while test_bound(bot.arm.get_ee_pose()) and itr < config['max_iterations']:
-
             itr += 1
-
+            
             try:
-
                 color_frame = get_valid_color_frame(pipeline)
                 color_image = np.asanyarray(color_frame.get_data())
 

@@ -36,13 +36,24 @@ from gsam2_terminator import TerminationHandler
 #  Simple config
 MAX_ITERATIONS = 200
 # TARGET_PATH = Path('/home/khw/IBVS-interbotix/assets/cat.png')
-TARGET_PATH = Path('/home/khw/IBVS-interbotix/assets/resized_cat.png')
+# TARGET_PATH = Path('/home/khw/IBVS-interbotix/assets/resized_cat.png')
 # TARGET_PATH = Path('/home/khw/IBVS-interbotix/assets/aruco.png')
+
+TARGET_PATH = Path('/home/khw/IBVS-interbotix/assets/frame_031.png')  # A realistic target
+TEXTURE_PATH= Path('/home/khw/IBVS-interbotix/assets/resized_cat.png')  # This ensures we don't use a deformed texture
 K = 20
 
 #  Error exit condition config
-MIN_ERROR = float("inf")
-ERROR_GROWTH_LIMIT = 0.90
+MIN_ERROR = float("inf")  # Track absolute minimum for reference
+EWMA_ERROR = None  # Exponentially weighted moving average of error
+EWMA_ALPHA = 0.3  # Smoothing factor: higher = more weight on recent errors (0 < alpha < 1)
+EARLY_TERM_BOOL = False
+
+# Iteration-relative convergence termination
+# Convergence limit grows as iterations progress: limit = base * sqrt(iteration)
+# This guarantees eventual termination - we become more lenient over time
+CONVERGENCE_BASE = 1.0  # Base convergence threshold
+CONVERGENCE_START_ITER = 50  # Start checking convergence after this many iterations
 
 # Global scene manager instance for accessing object locations
 SCENE_MANAGER = None
@@ -81,7 +92,7 @@ class SceneManager:
 
         # new offset for testing
         new_offsetx = 0.75
-        new_offsetz = 0.75
+        new_offsetz = 0.75 + 1.0
 
         # builds a wall of cubes
         for z_offset in [0, -1, 1]:   # z is up/down
@@ -90,9 +101,9 @@ class SceneManager:
                     body_id = p.loadURDF(
                         "cube_small.urdf",
                         [
-                            base[0] + x_offset + new_offsetx,
-                            base[1] + y_offset,
-                            base[2] + z_offset + new_offsetz,
+                            x_offset + new_offsetx,
+                            y_offset,
+                            z_offset + new_offsetz,
                         ],
                         base_orn,
                         globalScaling=20,  # Remove or adjust as needed
@@ -302,7 +313,7 @@ def set_aruco_marker_texture(obstacle_id: int) -> None:
     """
     sets the aruco marker texture on the obstacle
     """
-    texture_id = p.loadTexture(str(TARGET_PATH))
+    texture_id = p.loadTexture(str(TEXTURE_PATH))
     p.changeVisualShape(obstacle_id, -1, textureUniqueId=texture_id)
 
 
@@ -457,22 +468,73 @@ def update_pos_and_orn(
 
 def update_error(error_mag: float, iteration: int | None = None) -> None:
     """
-    updates the global min error
-    removed the break
+    Updates error metrics using exponentially weighted moving average (EWMA).
+    Terminates when convergence is detected using iteration-relative threshold.
+    
+    Convergence limit grows with iteration count: limit = base * sqrt(iteration)
+    This guarantees eventual termination by becoming more lenient over time.
     """
 
     global MIN_ERROR
+    global EWMA_ERROR
+    global EARLY_TERM_BOOL
 
     if iteration is not None:
         print(f"{iteration}:", end="")
+    
+    # Update absolute minimum (for reference)
     if error_mag < MIN_ERROR:
         MIN_ERROR = error_mag
-        print(f"new min error: {MIN_ERROR}")
-    else:
-        if error_mag > MIN_ERROR:
-            print(f"increase from min: {error_mag - MIN_ERROR}")
+    
+    # Initialize or update EWMA
+    if EWMA_ERROR is None:
+        # First iteration: initialize EWMA with current error
+        EWMA_ERROR = error_mag
+        print(f"initialized EWMA: {EWMA_ERROR:.6f}")
+        return
+    
+    # Calculate new EWMA: EWMA_new = alpha * current + (1 - alpha) * EWMA_old
+    old_ewma = EWMA_ERROR
+    EWMA_ERROR = EWMA_ALPHA * error_mag + (1 - EWMA_ALPHA) * EWMA_ERROR
+    
+    # Calculate change in EWMA
+    ewma_change = abs(EWMA_ERROR - old_ewma)
+    
+    # Check convergence after minimum iterations
+    if iteration is not None and iteration >= CONVERGENCE_START_ITER:
+        # Calculate iteration-relative convergence limit
+        # Limit increases as iterations increase: more lenient, guarantees termination
+        convergence_limit = CONVERGENCE_BASE * (iteration ** 0.5)
+        
+        if ewma_change < convergence_limit:
+            # Converged!
+            EARLY_TERM_BOOL = True
+            print(f"CONVERGED (EWMA change: {ewma_change:.8f} < limit: {convergence_limit:.8f}) "
+                  f"[error: {error_mag:.6f}, EWMA: {EWMA_ERROR:.6f}, min: {MIN_ERROR:.6f}]")
+            print(f"\n{'='*60}")
+            print(f"CONVERGENCE ACHIEVED at iteration {iteration}")
+            print(f"EWMA change: {ewma_change:.8f}")
+            print(f"Convergence limit: {convergence_limit:.8f} (= {CONVERGENCE_BASE:.8f} * sqrt({iteration}))")
+            print(f"Final EWMA: {EWMA_ERROR:.6f}")
+            print(f"Final error: {error_mag:.6f}")
+            print(f"MIN_ERROR: {MIN_ERROR:.6f}")
+            print(f"{'='*60}\n")
         else:
-            print(f"error remained same: {error_mag}")
+            # Not converged yet
+            if error_mag < old_ewma:
+                status = "improving"
+            else:
+                status = "not improving"
+            print(f"{status} (EWMA change: {ewma_change:.8f}, limit: {convergence_limit:.8f}) "
+                  f"[error: {error_mag:.6f}, EWMA: {EWMA_ERROR:.6f}, min: {MIN_ERROR:.6f}]")
+    else:
+        # Before convergence checking starts
+        if error_mag < old_ewma:
+            status = "improving"
+        else:
+            status = "not improving"
+        print(f"{status} (EWMA change: {ewma_change:.8f}) "
+              f"[error: {error_mag:.6f}, EWMA: {EWMA_ERROR:.6f}, min: {MIN_ERROR:.6f}]")
     
 
 ## ============ Driving code ============== ##
@@ -491,7 +553,7 @@ def main() -> None:
     # initialise the robot position and orientation (arbitrary)
     robot_pos = [0, 0, 1.0]    # [x, y, z]
     robot_orientation = [0.25, 0.25, 0.25]
-    robot_orientation = [0.2, 0.1, 0.0]
+    robot_orientation = [0.1, 0.1, 0.1]
 
     # set up scene
     _, _ = init_scene(robot_pos)
@@ -503,9 +565,6 @@ def main() -> None:
     # in-sim, we can easily obtain the current distance to the object
     # With real-world depth sensing, we will also have to segment out the goal object.
     initial_dist_obj_goal = np.linalg.norm(target_pos - robot_pos)
-
-    import os
-    os.makedirs('/home/khw/IBVS-interbotix/src/dist_img', exist_ok=True)
 
     # Initialize data logger
     log_dir = Path(__file__).parent / 'logs'
@@ -523,7 +582,7 @@ def main() -> None:
 
     sleep(1)  # arbitrary sleep to let the scene load
     
-    for i in range(40):
+    for i in range(100):
 
         p.stepSimulation()
         robot_rot_matrix = get_robot_rotation_matrix(robot_orientation) 
@@ -536,7 +595,7 @@ def main() -> None:
         )
         rgb_img_arr = rgba_arr[:, :, :3]  # remove alpha channel [..,4] -> [..,3]
 
-        save_impath = f'/home/khw/IBVS-interbotix/src/dist_img/dist_img_{i}.png'
+        save_impath = '/tmp/ibvs_dist_img.png'
         cv2.imwrite(save_impath, cv2.cvtColor(rgb_img_arr, cv2.COLOR_RGB2BGR))
 
         src_kpts, tgt_kpts = match_superpoints(
@@ -557,7 +616,8 @@ def main() -> None:
         mse_error = motion_utils.get_error_mse(error_vec)
 
         # Save image with error printed
-        save_image(mse_error, i, rgb_img_arr, MIN_ERROR)
+        if i % 20 == 0:
+            save_image(mse_error, i, rgb_img_arr, MIN_ERROR)
 
         # Log iteration data
         data_logger.log_iteration(
@@ -570,7 +630,7 @@ def main() -> None:
             image_path=save_impath
         )
 
-        # UNcomment code for early exit conditioned on MSE divergence
+        # Early exit test
         # update_error(mse_error, iteration=i)
 
         #  Sets the velocity, transform vector, and update position and orientation
@@ -604,6 +664,9 @@ def main() -> None:
             # Check termination condition using segmentation mask similarity
             if termination_handler.check_termination(save_impath, iteration=i):
                 break
+
+        if EARLY_TERM_BOOL:
+            break
 
 
     # Close data logger

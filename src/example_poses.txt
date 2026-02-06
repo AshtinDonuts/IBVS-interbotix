@@ -1,0 +1,28 @@
+# Example poses file for run_sim_batch.py
+# Format: x y z roll pitch yaw
+# Each line represents one simulation run
+# Lines starting with # are comments and will be ignored
+
+# Default pose (straight ahead)
+0 0 1.0 0 0 0
+
+# Offset positions (testing x-axis movement)
+1.0 0 1.0 0 0 0
+-0.5 0 1.0 0 0 0
+
+# Different heights (testing z-axis)
+0 0 1.5 0 0 0
+0 0 0.8 0 0 0
+
+# Rotation tests (testing orientation)
+0 0 1.0 0.1 0 0      # Small roll
+0 0 1.0 0 0.1 0      # Small pitch
+0 0 1.0 0 0 0.1      # Small yaw
+
+# Combined offsets
+0.5 0 1.2 0 0.05 0
+-0.3 0 1.3 0.05 0 0.05
+
+# More challenging poses
+1.0 0.5 1.5 0.1 0.1 0.1
+-0.5 -0.2 1.0 0 0.15 0
